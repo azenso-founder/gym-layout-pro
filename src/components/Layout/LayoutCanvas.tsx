@@ -3,11 +3,11 @@
 // Usa react-konva — soporta multi-select, floor plans, atajos
 // ==========================================
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Stage, Layer, Rect, Line, Circle, Group, Text, Image as KonvaImage, RegularPolygon } from 'react-konva';
 import useStore, { m2px, px2m, PIXELS_PER_METER } from '../../stores/useStore';
 import { CATEGORY_COLORS, CLIENT_STATE_COLORS } from '../../types';
-import type { FloorRoom } from '../../types';
+import type { FloorRoom, ImageLayer } from '../../types';
 import { calcularHaloRadius, getOperativeSides } from '../../engine/guerchet';
 import { PLANTA_INFO } from '../../data/machines';
 import useImage from '../../utils/useImage';
@@ -52,6 +52,24 @@ export default function LayoutCanvas() {
   const pendingFinish = useStore((s) => s.pendingFinish);
   const activeTool = useStore((s) => s.activeTool);
   const getRoomArea = useStore((s) => s.getRoomArea);
+
+  // Room editing (layers)
+  const selectedRoomId = useStore((s) => s.selectedRoomId);
+  const setSelectedRoom = useStore((s) => s.setSelectedRoom);
+  const updateRoomVertex = useStore((s) => s.updateRoomVertex);
+  const moveRoom = useStore((s) => s.moveRoom);
+  const removeRoomVertex = useStore((s) => s.removeRoomVertex);
+  const addRoomVertex = useStore((s) => s.addRoomVertex);
+
+  // Image layers
+  const imageLayers = useStore((s) => s.imageLayers);
+  const selectedImageId = useStore((s) => s.selectedImageId);
+  const setSelectedImage = useStore((s) => s.setSelectedImage);
+  const updateImageLayer = useStore((s) => s.updateImageLayer);
+
+  // Custom measures (guide lines)
+  const customMeasures = useStore((s) => s.customMeasures);
+  const addCustomMeasure = useStore((s) => s.addCustomMeasure);
 
   // Image calibration
   const imgCalibrations = useStore((s) => s.imgCalibrations);
@@ -148,9 +166,19 @@ export default function LayoutCanvas() {
         return;
       }
 
-      // Escape: Clear selection
+      // Escape: Clear selection (machines and rooms)
       if (e.key === 'Escape') {
         store.clearSelection();
+        return;
+      }
+
+      // Delete selected room (if a room is selected, not a machine)
+      if ((e.key === 'Delete' || e.key === 'Backspace') && store.selectedRoomId && !hasSelection) {
+        const room = store.floorRooms.find((r: FloorRoom) => r.id === store.selectedRoomId);
+        if (room && !room.locked) {
+          store.removeFloorRoom(store.selectedRoomId);
+          store.setSelectedRoom(null);
+        }
         return;
       }
 
@@ -262,11 +290,12 @@ export default function LayoutCanvas() {
   };
 
   return (
-    <div
-      ref={containerRef}
-      tabIndex={-1}
-      className={`flex-1 bg-zinc-950 overflow-hidden relative outline-none ${activeTool === 'trace' ? 'cursor-crosshair' : ''}`}
-    >
+    <div className="flex-1 flex bg-zinc-950 overflow-hidden">
+      <div
+        ref={containerRef}
+        tabIndex={-1}
+        className={`flex-1 relative outline-none ${activeTool === 'trace' ? 'cursor-crosshair' : ''}`}
+      >
       {!mounted ? null : (
       <Stage
         ref={stageRef}
@@ -285,6 +314,24 @@ export default function LayoutCanvas() {
         }}
         onClick={(e) => {
           if (e.target === stageRef.current) {
+            const evt = e.evt as MouseEvent;
+
+            // Ctrl+Click → place guide line at clicked position
+            if (evt.ctrlKey || evt.metaKey) {
+              const stage = stageRef.current;
+              const pointer = stage.getPointerPosition();
+              if (pointer) {
+                const canvasX = (pointer.x - canvasOffset.x) / canvasScale;
+                const canvasY = (pointer.y - canvasOffset.y) / canvasScale;
+                // Determine axis: Shift → horizontal (Y), default → vertical (X)
+                const axis: 'x' | 'y' = evt.shiftKey ? 'y' : 'x';
+                const mValue = px2m(axis === 'x' ? canvasX : canvasY);
+                const snapped = Math.round(mValue * 20) / 20; // snap to 0.05m
+                addCustomMeasure(axis, snapped, `${snapped.toFixed(2)}m`, activePlanta);
+              }
+              return;
+            }
+
             if (activeTool === 'trace' && isTracing) {
               // Get click position in canvas coordinates
               const stage = stageRef.current;
@@ -392,12 +439,97 @@ export default function LayoutCanvas() {
             ))}
         </Layer>
 
-        {/* Floor Rooms (traced polygons) */}
+        {/* Image Layers (background images — editable) */}
+        <Layer>
+          {imageLayers
+            .filter((img) => img.planta === activePlanta && img.visible)
+            .map((img) => (
+              <ImageLayerShape
+                key={img.id}
+                layer={img}
+                isSelected={selectedImageId === img.id}
+                onSelect={() => { setSelectedImage(img.id); clearSelection(); }}
+                onUpdate={(updates) => updateImageLayer(img.id, updates)}
+                snapToGrid={snapToGrid}
+                isTracing={isTracing}
+              />
+            ))}
+        </Layer>
+
+        {/* Custom Guide Lines (personalized measurements) */}
         <Layer listening={false}>
+          {customMeasures
+            .filter((m) => m.planta === activePlanta && m.visible)
+            .map((measure) => {
+              const px = m2px(measure.value);
+              return (
+                <Group key={measure.id}>
+                  {measure.axis === 'x' ? (
+                    // Vertical line (constant X)
+                    <>
+                      <Line
+                        points={[px, 0, px, canvasH]}
+                        stroke="#10B981"
+                        strokeWidth={1}
+                        dash={[3, 3]}
+                        opacity={0.5}
+                      />
+                      <Text
+                        x={px + 4}
+                        y={10}
+                        text={measure.label}
+                        fill="#10B981"
+                        fontSize={9}
+                        fontStyle="bold"
+                        backgroundColor="#111118"
+                        padding={2}
+                      />
+                    </>
+                  ) : (
+                    // Horizontal line (constant Y)
+                    <>
+                      <Line
+                        points={[0, px, canvasW, px]}
+                        stroke="#06B6D4"
+                        strokeWidth={1}
+                        dash={[3, 3]}
+                        opacity={0.5}
+                      />
+                      <Text
+                        x={10}
+                        y={px + 4}
+                        text={measure.label}
+                        fill="#06B6D4"
+                        fontSize={9}
+                        fontStyle="bold"
+                        backgroundColor="#111118"
+                        padding={2}
+                      />
+                    </>
+                  )}
+                </Group>
+              );
+            })}
+        </Layer>
+
+        {/* Floor Rooms (traced polygons — interactive layers) */}
+        <Layer>
           {floorRooms
-            .filter((r) => r.planta === activePlanta)
+            .filter((r) => r.planta === activePlanta && r.visible)
             .map((room) => (
-              <FloorRoomShape key={room.id} room={room} getRoomArea={getRoomArea} />
+              <FloorRoomShape
+                key={room.id}
+                room={room}
+                getRoomArea={getRoomArea}
+                isSelected={selectedRoomId === room.id}
+                onSelect={(id) => { setSelectedRoom(id); clearSelection(); }}
+                onVertexDrag={(vertexIdx, x, y) => updateRoomVertex(room.id, vertexIdx, x, y)}
+                onShapeDrag={(dx, dy) => moveRoom(room.id, dx, dy)}
+                onRemoveVertex={(vertexIdx) => removeRoomVertex(room.id, vertexIdx)}
+                onAddVertex={(afterIdx, x, y) => addRoomVertex(room.id, afterIdx, x, y)}
+                snapToGrid={snapToGrid}
+                isTracing={isTracing}
+              />
             ))}
         </Layer>
 
@@ -600,6 +732,8 @@ export default function LayoutCanvas() {
         <div><kbd className="text-zinc-500">R</kbd> rotar · <kbd className="text-zinc-500">D</kbd> duplicar · <kbd className="text-zinc-500">L</kbd> lock</div>
         <div><kbd className="text-zinc-500">Ctrl+A</kbd> seleccionar todas</div>
       </div>
+      </div>
+
     </div>
   );
 }
@@ -620,7 +754,7 @@ function DirectionalHalo({
 
   // Las franjas de lados izq/der cubren las esquinas si top/bottom están activos
   // Las franjas top/bottom van solo entre los lados (evita doble opacidad en esquinas)
-  const elements: JSX.Element[] = [];
+  const elements: React.JSX.Element[] = [];
 
   // ─ Franjas verticales (cubren esquinas) ─
   if (left) {
@@ -709,7 +843,7 @@ function DirectionalHalo({
 }
 
 // ---- N-side indicators (small triangles on operative sides) ----
-function NsideIndicators({ w, h, N, color }: { w: number; h: number; N: number; color: string }) {
+function NsideIndicators({ w, h, N }: { w: number; h: number; N: number; color?: string }) {
   const arrowSize = Math.min(5, Math.min(w, h) / 6);
   const arrowColor = '#ffffffCC';
 
@@ -752,7 +886,7 @@ function GridLines({
   height: number;
   step: number;
 }) {
-  const lines: JSX.Element[] = [];
+  const lines: React.JSX.Element[] = [];
   for (let x = 0; x <= width; x += step) {
     const isMeter = Math.abs(x % PIXELS_PER_METER) < 1;
     lines.push(
@@ -780,7 +914,7 @@ function GridLines({
 
 // ---- Ruler Labels (meter markers along edges) ----
 function RulerLabels({ width, height }: { width: number; height: number }) {
-  const labels: JSX.Element[] = [];
+  const labels: React.JSX.Element[] = [];
   const meterStep = PIXELS_PER_METER;
 
   // Top edge labels (every 2m)
@@ -830,9 +964,25 @@ function edgeLengthM(p1: { x: number; y: number }, p2: { x: number; y: number })
 function FloorRoomShape({
   room,
   getRoomArea,
+  isSelected,
+  onSelect,
+  onVertexDrag,
+  onShapeDrag,
+  onRemoveVertex,
+  onAddVertex,
+  snapToGrid,
+  isTracing,
 }: {
   room: FloorRoom;
   getRoomArea: (r: FloorRoom) => number;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+  onVertexDrag: (vertexIdx: number, x: number, y: number) => void;
+  onShapeDrag: (dx: number, dy: number) => void;
+  onRemoveVertex: (vertexIdx: number) => void;
+  onAddVertex: (afterIdx: number, x: number, y: number) => void;
+  snapToGrid: (val: number) => number;
+  isTracing: boolean;
 }) {
   if (room.points.length < 3) return null;
 
@@ -843,15 +993,25 @@ function FloorRoomShape({
   const cx = room.points.reduce((s, p) => s + p.x, 0) / room.points.length;
   const cy = room.points.reduce((s, p) => s + p.y, 0) / room.points.length;
 
+  // Track drag start for whole-shape dragging
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+
   return (
-    <Group listening={false}>
-      {/* Fill */}
+    <Group>
+      {/* Fill — clickable to select */}
       <Line
         points={flatPoints}
         closed
-        fill={room.color + '18'}
-        stroke={room.color}
-        strokeWidth={2}
+        fill={room.color + (isSelected ? '30' : '18')}
+        stroke={isSelected ? '#ffffff' : room.color}
+        strokeWidth={isSelected ? 2.5 : 2}
+        dash={isSelected ? [6, 3] : undefined}
+        hitStrokeWidth={8}
+        listening={!isTracing}
+        onClick={(e) => {
+          e.cancelBubble = true;
+          onSelect(room.id);
+        }}
       />
 
       {/* Edge dimension labels */}
@@ -871,7 +1031,7 @@ function FloorRoomShape({
         const off = 8;
 
         return (
-          <Group key={`dim-${i}`}>
+          <Group key={`dim-${i}`} listening={false}>
             <Rect
               x={mx + nx * off - 18}
               y={my + ny * off - 6}
@@ -902,6 +1062,7 @@ function FloorRoomShape({
         height={32}
         fill="#000000DD"
         cornerRadius={4}
+        listening={false}
       />
       <Text
         x={cx - 30}
@@ -912,6 +1073,7 @@ function FloorRoomShape({
         fontSize={9}
         fontStyle="bold"
         align="center"
+        listening={false}
       />
       <Text
         x={cx - 30}
@@ -922,20 +1084,88 @@ function FloorRoomShape({
         fontSize={10}
         fontStyle="bold"
         align="center"
+        listening={false}
       />
 
-      {/* Vertex dots */}
+      {/* Edge midpoints — click to add vertex (only when selected) */}
+      {isSelected && !room.locked && room.points.map((p, i) => {
+        const next = room.points[(i + 1) % room.points.length];
+        const mx = (p.x + next.x) / 2;
+        const my = (p.y + next.y) / 2;
+        return (
+          <Circle
+            key={`mid-${i}`}
+            x={mx}
+            y={my}
+            radius={4}
+            fill={room.color + '60'}
+            stroke={room.color}
+            strokeWidth={1}
+            listening={!isTracing}
+            onClick={(e) => {
+              e.cancelBubble = true;
+              onAddVertex(i, mx, my);
+            }}
+          />
+        );
+      })}
+
+      {/* Vertex dots — draggable when selected + unlocked */}
       {room.points.map((p, i) => (
         <Circle
           key={`v-${i}`}
           x={p.x}
           y={p.y}
-          radius={3}
-          fill={room.color}
-          stroke="#fff"
-          strokeWidth={0.5}
+          radius={isSelected ? 5 : 3}
+          fill={isSelected ? '#ffffff' : room.color}
+          stroke={isSelected ? room.color : '#fff'}
+          strokeWidth={isSelected ? 2 : 0.5}
+          draggable={isSelected && !room.locked && !isTracing}
+          listening={!isTracing}
+          onDragMove={(e) => {
+            const node = e.target;
+            const sx = snapToGrid(node.x());
+            const sy = snapToGrid(node.y());
+            node.x(sx);
+            node.y(sy);
+            onVertexDrag(i, sx, sy);
+          }}
+          onDblClick={(e) => {
+            e.cancelBubble = true;
+            if (isSelected && !room.locked && room.points.length > 3) {
+              onRemoveVertex(i);
+            }
+          }}
         />
       ))}
+
+      {/* Drag handle at centroid (move whole shape, only when selected + unlocked) */}
+      {isSelected && !room.locked && (
+        <Circle
+          x={cx}
+          y={cy + 20}
+          radius={7}
+          fill={room.color + 'AA'}
+          stroke="#fff"
+          strokeWidth={1.5}
+          draggable={!isTracing}
+          listening={!isTracing}
+          onDragStart={(e) => {
+            dragStartRef.current = { x: e.target.x(), y: e.target.y() };
+          }}
+          onDragEnd={(e) => {
+            if (dragStartRef.current) {
+              const dx = snapToGrid(e.target.x() - dragStartRef.current.x);
+              const dy = snapToGrid(e.target.y() - dragStartRef.current.y);
+              onShapeDrag(dx, dy);
+              // Reset the handle position — the room points moved, so the centroid shifted
+              e.target.x(dragStartRef.current.x + dx);
+              e.target.y(dragStartRef.current.y + dy);
+              dragStartRef.current = null;
+            }
+          }}
+        />
+      )}
     </Group>
   );
 }
@@ -1084,6 +1314,150 @@ function TracingPreview({ points }: { points: { x: number; y: number }[] }) {
             align="center"
           />
         </Group>
+      )}
+    </Group>
+  );
+}
+
+// ---- Image Layer Shape (editable background image) ----
+function ImageLayerShape({
+  layer,
+  isSelected,
+  onSelect,
+  onUpdate,
+  snapToGrid,
+  isTracing,
+}: {
+  layer: ImageLayer;
+  isSelected: boolean;
+  onSelect: () => void;
+  onUpdate: (updates: Partial<ImageLayer>) => void;
+  snapToGrid: (val: number) => number;
+  isTracing: boolean;
+}) {
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const resizeStartRef = useRef<{ startW: number; startH: number; startX: number; startY: number } | null>(null);
+  const [imgEl] = useImage(layer.src);
+
+  if (!imgEl || !layer.src) return null;
+
+  const HANDLE_SIZE = 8;
+  const handleColor = '#00BFF3';
+
+  return (
+    <Group>
+      {/* Image */}
+      <KonvaImage
+        image={imgEl}
+        x={layer.x}
+        y={layer.y}
+        width={layer.width}
+        height={layer.height}
+        rotation={layer.rotation}
+        opacity={0.7}
+        hitStrokeWidth={8}
+        listening={!isTracing && !layer.locked}
+        onClick={() => !isTracing && !layer.locked && onSelect()}
+        onDragStart={(e) => {
+          if (layer.locked || isTracing) return;
+          dragStartRef.current = { x: e.target.x(), y: e.target.y() };
+        }}
+        onDragEnd={(e) => {
+          if (!dragStartRef.current) return;
+          const x = snapToGrid(e.target.x());
+          const y = snapToGrid(e.target.y());
+          onUpdate({ x, y });
+          dragStartRef.current = null;
+        }}
+        draggable={!layer.locked && !isTracing}
+      />
+
+      {/* Selection border + handles */}
+      {isSelected && !layer.locked && (
+        <Group>
+          {/* Border */}
+          <Rect
+            x={layer.x}
+            y={layer.y}
+            width={layer.width}
+            height={layer.height}
+            stroke={handleColor}
+            strokeWidth={2}
+            dash={[4, 4]}
+            listening={false}
+          />
+
+          {/* Corner/edge resize handles */}
+          {/* Top-left */}
+          <Circle
+            x={layer.x}
+            y={layer.y}
+            radius={HANDLE_SIZE / 2}
+            fill={handleColor}
+            stroke="white"
+            strokeWidth={1}
+            draggable
+            onDragStart={() => {
+              resizeStartRef.current = {
+                startW: layer.width,
+                startH: layer.height,
+                startX: layer.x,
+                startY: layer.y,
+              };
+            }}
+            onDragEnd={(e) => {
+              if (!resizeStartRef.current) return;
+              const dx = e.target.x() - resizeStartRef.current.startX;
+              const dy = e.target.y() - resizeStartRef.current.startY;
+              const newW = Math.max(50, resizeStartRef.current.startW - dx);
+              const newH = Math.max(50, resizeStartRef.current.startH - dy);
+              onUpdate({
+                x: layer.x + dx,
+                y: layer.y + dy,
+                width: newW,
+                height: newH,
+              });
+              resizeStartRef.current = null;
+            }}
+          />
+
+          {/* Bottom-right */}
+          <Circle
+            x={layer.x + layer.width}
+            y={layer.y + layer.height}
+            radius={HANDLE_SIZE / 2}
+            fill={handleColor}
+            stroke="white"
+            strokeWidth={1}
+            draggable
+            onDragStart={() => {
+              resizeStartRef.current = {
+                startW: layer.width,
+                startH: layer.height,
+                startX: layer.x,
+                startY: layer.y,
+              };
+            }}
+            onDragEnd={(e) => {
+              if (!resizeStartRef.current) return;
+              const newW = Math.max(50, e.target.x() - resizeStartRef.current.startX);
+              const newH = Math.max(50, e.target.y() - resizeStartRef.current.startY);
+              onUpdate({ width: newW, height: newH });
+              resizeStartRef.current = null;
+            }}
+          />
+        </Group>
+      )}
+
+      {/* Lock indicator */}
+      {layer.locked && (
+        <Text
+          x={layer.x + layer.width / 2 - 12}
+          y={layer.y + layer.height / 2 - 8}
+          text="🔒"
+          fontSize={20}
+          listening={false}
+        />
       )}
     </Group>
   );

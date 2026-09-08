@@ -8,6 +8,7 @@ import { v4 as uuid } from 'uuid';
 import type {
   MachineInstance,
   MachineTemplate,
+  MachineCategory,
   Zone,
   SLPRelation,
   AppTab,
@@ -17,6 +18,8 @@ import type {
   SimulationMetrics,
   FloorRoom,
   ImgCalibration,
+  ImageLayer,
+  CustomMeasure,
 } from '../types';
 import { ALL_DEFAULT_MACHINES, PLANTA_INFO } from '../data/machines';
 
@@ -36,9 +39,12 @@ interface SavedState {
   machines: MachineInstance[];
   zones: Zone[];
   floorRooms: FloorRoom[];
+  imageLayers: ImageLayer[];
+  customMeasures: CustomMeasure[];
   imgCalibrations: Record<'baja' | 'alta', ImgCalibration>;
   slpRelations: Record<string, SLPRelation>;
   activePlanta: 'baja' | 'alta';
+  bgImages?: { baja: string | null; alta: string | null };
   bgOpacity: number;
   showBg: boolean;
   showGrid: boolean;
@@ -72,6 +78,8 @@ function debouncedSave(state: AppState) {
         machines: state.machines,
         zones: state.zones,
         floorRooms: state.floorRooms,
+        imageLayers: state.imageLayers,
+        customMeasures: state.customMeasures,
         imgCalibrations: state.imgCalibrations,
         slpRelations: state.slpRelations,
         activePlanta: state.activePlanta,
@@ -191,18 +199,57 @@ interface AppState {
   floorRooms: FloorRoom[];
   tracingPoints: { x: number; y: number }[];
   isTracing: boolean;
-  pendingFinish: boolean;  // true when polygon is closed and waiting for a name
-  addFloorRoom: (name: string, color: string) => void;
-  removeFloorRoom: (id: string) => void;
-  renameFloorRoom: (id: string, name: string) => void;
+  pendingFinish: boolean;
+  selectedRoomId: string | null;
+
+  // === Image Layers ===
+  imageLayers: ImageLayer[];
+  selectedImageId: string | null;
+  // Tracing actions
   startTracing: () => void;
   addTracingPoint: (x: number, y: number) => void;
   undoTracingPoint: () => void;
-  requestFinish: () => void;  // sets pendingFinish, shows name input
+  requestFinish: () => void;
   finishTracing: (name: string, color?: string) => void;
   cancelTracing: () => void;
+  // Room CRUD
+  addFloorRoom: (name: string, color: string) => void;
+  removeFloorRoom: (id: string) => void;
+  renameFloorRoom: (id: string, name: string) => void;
+  // Room editing (layers)
+  setSelectedRoom: (id: string | null) => void;
+  updateRoomVertex: (id: string, vertexIdx: number, x: number, y: number) => void;
+  moveRoom: (id: string, dx: number, dy: number) => void;
+  addRoomVertex: (id: string, afterIdx: number, x: number, y: number) => void;
+  removeRoomVertex: (id: string, vertexIdx: number) => void;
+  toggleRoomVisibility: (id: string) => void;
+  toggleRoomLock: (id: string) => void;
+  setRoomColor: (id: string, color: string) => void;
+  // Area helpers
   getRoomArea: (room: FloorRoom) => number;
   getTotalFloorArea: (planta: 'baja' | 'alta') => number;
+
+  // Image layer actions
+  addImageLayer: (src: string, planta: 'baja' | 'alta') => void;
+  removeImageLayer: (id: string) => void;
+  setSelectedImage: (id: string | null) => void;
+  updateImageLayer: (id: string, updates: Partial<ImageLayer>) => void;
+  toggleImageVisibility: (id: string) => void;
+  toggleImageLock: (id: string) => void;
+
+  // Custom measures (líneas guía personalizadas)
+  customMeasures: CustomMeasure[];
+  addCustomMeasure: (axis: 'x' | 'y', value: number, label: string, planta: 'baja' | 'alta') => void;
+  removeCustomMeasure: (id: string) => void;
+  updateCustomMeasure: (id: string, updates: Partial<CustomMeasure>) => void;
+  toggleCustomMeasureVisibility: (id: string) => void;
+
+  // === Custom Machine Templates ===
+  addCustomTemplate: (data: {
+    nombre: string; categoria: MachineCategory; largo: number; ancho: number;
+    alto: number; N: number; K: number; planta: 'baja' | 'alta';
+    tiempoServicio: { min: number; moda: number; max: number };
+  }) => void;
 
   // === Image Calibration ===
   imgCalibrations: Record<'baja' | 'alta', ImgCalibration>;
@@ -308,7 +355,7 @@ const useStore = create<AppState>((set, get) => ({
     });
   },
   clearSelection: () =>
-    set({ selectedMachineId: null, selectedMachineIds: [] }),
+    set({ selectedMachineId: null, selectedMachineIds: [], selectedRoomId: null }),
 
   // === Bulk operations ===
   bulkRotate: (angle) => {
@@ -572,10 +619,22 @@ const useStore = create<AppState>((set, get) => ({
   removeZone: (id) => set((s) => ({ zones: s.zones.filter((z) => z.id !== id) })),
 
   // === Floor Plan Tracing ===
-  floorRooms: saved?.floorRooms ?? [],
+  // Migrate legacy rooms that lack visible/locked fields
+  floorRooms: (saved?.floorRooms ?? []).map((r) => ({
+    ...r,
+    visible: r.visible ?? true,
+    locked: r.locked ?? false,
+  })),
   tracingPoints: [],
   isTracing: false,
   pendingFinish: false,
+
+  // === Image Layers ===
+  imageLayers: saved?.imageLayers ?? [],
+  selectedImageId: null,
+
+  // === Custom Measures ===
+  customMeasures: saved?.customMeasures ?? [],
 
   startTracing: () => set({ isTracing: true, tracingPoints: [], pendingFinish: false, activeTool: 'trace' as EditorTool }),
 
@@ -623,6 +682,8 @@ const useStore = create<AppState>((set, get) => ({
       points: [...tracingPoints],
       planta: activePlanta,
       color: roomColor,
+      visible: true,
+      locked: false,
     };
     set({
       floorRooms: [...floorRooms, room],
@@ -644,6 +705,8 @@ const useStore = create<AppState>((set, get) => ({
       points: [],
       planta: activePlanta,
       color: color || ROOM_COLORS[floorRooms.length % ROOM_COLORS.length],
+      visible: true,
+      locked: false,
     };
     set({ floorRooms: [...floorRooms, room] });
   },
@@ -661,6 +724,184 @@ const useStore = create<AppState>((set, get) => ({
   getTotalFloorArea: (planta) => {
     const rooms = get().floorRooms.filter((r) => r.planta === planta);
     return rooms.reduce((sum, r) => sum + shoelaceAreaM2(r.points), 0);
+  },
+
+  // === Room Editing (Layer-like) ===
+  selectedRoomId: null,
+
+  setSelectedRoom: (id) =>
+    set({ selectedRoomId: id, selectedMachineId: null, selectedMachineIds: [] }),
+
+  updateRoomVertex: (id, vertexIdx, x, y) => {
+    const { snapGrid: sg } = get();
+    const gridPx = m2px(sg);
+    const sx = Math.round(x / gridPx) * gridPx;
+    const sy = Math.round(y / gridPx) * gridPx;
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) => {
+        if (r.id !== id) return r;
+        const pts = [...r.points];
+        pts[vertexIdx] = { x: sx, y: sy };
+        return { ...r, points: pts };
+      }),
+    }));
+  },
+
+  moveRoom: (id, dx, dy) =>
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) => {
+        if (r.id !== id || r.locked) return r;
+        return { ...r, points: r.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+      }),
+    })),
+
+  addRoomVertex: (id, afterIdx, x, y) => {
+    const { snapGrid: sg } = get();
+    const gridPx = m2px(sg);
+    const sx = Math.round(x / gridPx) * gridPx;
+    const sy = Math.round(y / gridPx) * gridPx;
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) => {
+        if (r.id !== id) return r;
+        const pts = [...r.points];
+        pts.splice(afterIdx + 1, 0, { x: sx, y: sy });
+        return { ...r, points: pts };
+      }),
+    }));
+  },
+
+  removeRoomVertex: (id, vertexIdx) =>
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) => {
+        if (r.id !== id || r.points.length <= 3) return r; // keep min 3 vertices
+        const pts = r.points.filter((_, i) => i !== vertexIdx);
+        return { ...r, points: pts };
+      }),
+    })),
+
+  toggleRoomVisibility: (id) =>
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) =>
+        r.id === id ? { ...r, visible: !r.visible } : r
+      ),
+    })),
+
+  toggleRoomLock: (id) =>
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) =>
+        r.id === id ? { ...r, locked: !r.locked } : r
+      ),
+    })),
+
+  setRoomColor: (id, color) =>
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) =>
+        r.id === id ? { ...r, color } : r
+      ),
+    })),
+
+  // === Image Layers ===
+  addImageLayer: (src, planta) => {
+    const layer: ImageLayer = {
+      id: uuid(),
+      planta,
+      src,
+      x: 0,
+      y: 0,
+      width: m2px(20), // default 20m wide
+      height: m2px(30), // default 30m tall
+      visible: true,
+      locked: false,
+      rotation: 0,
+    };
+    set((s) => ({ imageLayers: [...s.imageLayers, layer] }));
+  },
+
+  removeImageLayer: (id) =>
+    set((s) => ({
+      imageLayers: s.imageLayers.filter((l) => l.id !== id),
+      selectedImageId: s.selectedImageId === id ? null : s.selectedImageId,
+    })),
+
+  setSelectedImage: (id) =>
+    set({ selectedImageId: id, selectedMachineId: null, selectedMachineIds: [], selectedRoomId: null }),
+
+  updateImageLayer: (id, updates) =>
+    set((s) => ({
+      imageLayers: s.imageLayers.map((l) =>
+        l.id === id ? { ...l, ...updates } : l
+      ),
+    })),
+
+  toggleImageVisibility: (id) =>
+    set((s) => ({
+      imageLayers: s.imageLayers.map((l) =>
+        l.id === id ? { ...l, visible: !l.visible } : l
+      ),
+    })),
+
+  toggleImageLock: (id) =>
+    set((s) => ({
+      imageLayers: s.imageLayers.map((l) =>
+        l.id === id ? { ...l, locked: !l.locked } : l
+      ),
+    })),
+
+  // === Custom Measures ===
+  addCustomMeasure: (axis, value, label, planta) => {
+    const measure: CustomMeasure = {
+      id: uuid(),
+      axis,
+      value,
+      label,
+      planta,
+      visible: true,
+    };
+    set((s) => ({ customMeasures: [...s.customMeasures, measure] }));
+  },
+
+  removeCustomMeasure: (id) =>
+    set((s) => ({
+      customMeasures: s.customMeasures.filter((m) => m.id !== id),
+    })),
+
+  updateCustomMeasure: (id, updates) =>
+    set((s) => ({
+      customMeasures: s.customMeasures.map((m) =>
+        m.id === id ? { ...m, ...updates } : m
+      ),
+    })),
+
+  toggleCustomMeasureVisibility: (id) =>
+    set((s) => ({
+      customMeasures: s.customMeasures.map((m) =>
+        m.id === id ? { ...m, visible: !m.visible } : m
+      ),
+    })),
+
+  // === Custom Machine Templates ===
+  addCustomTemplate: (data) => {
+    const Ss = data.largo * data.ancho;
+    const Sg = Ss * data.N;
+    const Se = data.K * (Ss + Sg);
+    const St = Ss + Sg + Se;
+    const template: MachineTemplate = {
+      id: uuid(),
+      nombre: data.nombre,
+      categoria: data.categoria,
+      largo: data.largo,
+      ancho: data.ancho,
+      alto: data.alto,
+      N: data.N,
+      K: data.K,
+      Ss: Math.round(Ss * 1000) / 1000,
+      Sg: Math.round(Sg * 1000) / 1000,
+      Se: Math.round(Se * 1000) / 1000,
+      St: Math.round(St * 1000) / 1000,
+      planta: data.planta,
+      tiempoServicio: data.tiempoServicio,
+    };
+    set((s) => ({ templates: [...s.templates, template] }));
   },
 
   // === Image Calibration ===
@@ -703,13 +944,13 @@ const useStore = create<AppState>((set, get) => ({
   setSimMetrics: (m) => set({ simMetrics: m }),
   toggleHeatmap: () => set((s) => ({ showHeatmap: !s.showHeatmap })),
 
-  // === Background (per-planta, pre-loaded with floor plans) ===
-  bgImages: {
-    baja: PLANTA_INFO.baja.bgImage,
-    alta: PLANTA_INFO.alta.bgImage,
+  // === Background (per-planta, user-imported) ===
+  bgImages: saved?.bgImages ?? {
+    baja: null,
+    alta: null,
   },
   bgOpacity: saved?.bgOpacity ?? 0.3,
-  showBg: saved?.showBg ?? true,
+  showBg: saved?.showBg ?? false,
   setBgImage: (planta, img) =>
     set((s) => ({ bgImages: { ...s.bgImages, [planta]: img } })),
   setBgOpacity: (o) => set({ bgOpacity: o }),
@@ -772,6 +1013,8 @@ const useStore = create<AppState>((set, get) => ({
       machines: [],
       zones: [],
       floorRooms: [],
+      imageLayers: [],
+      customMeasures: [],
       slpRelations: {},
       imgCalibrations: { ...DEFAULT_IMG_CALIBRATIONS },
       lastSaved: null,

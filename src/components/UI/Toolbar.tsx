@@ -54,8 +54,13 @@ export default function Toolbar() {
   const startTracing = useStore((s) => s.startTracing);
   const isTracing = useStore((s) => s.isTracing);
   const cancelTracing = useStore((s) => s.cancelTracing);
+  const requestFinish = useStore((s) => s.requestFinish);
+  const tracingPoints = useStore((s) => s.tracingPoints);
   const floorRooms = useStore((s) => s.floorRooms);
   const getTotalFloorArea = useStore((s) => s.getTotalFloorArea);
+
+  // Custom measures
+  const addCustomMeasure = useStore((s) => s.addCustomMeasure);
 
   // Image calibration
   const imgCalibrations = useStore((s) => s.imgCalibrations);
@@ -64,6 +69,9 @@ export default function Toolbar() {
   const imgCal = imgCalibrations[activePlanta];
 
   const [showCalibration, setShowCalibration] = useState(false);
+  const [showMeasures, setShowMeasures] = useState(false);
+  const [measureInput, setMeasureInput] = useState('');
+  const [measureAxis, setMeasureAxis] = useState<'x' | 'y'>('x');
 
   // Save indicator animation
   const [showSaved, setShowSaved] = useState(false);
@@ -75,6 +83,17 @@ export default function Toolbar() {
     }
   }, [lastSaved]);
 
+  const addImageLayer = useStore((s) => s.addImageLayer);
+
+  const handleAddMeasure = () => {
+    const val = parseFloat(measureInput.trim());
+    if (!isNaN(val) && val >= 0) {
+      const label = `${val.toFixed(2)}m`;
+      addCustomMeasure(measureAxis, val, label, activePlanta);
+      setMeasureInput('');
+    }
+  };
+
   const handleImportBg = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -83,7 +102,12 @@ export default function Toolbar() {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
         const reader = new FileReader();
-        reader.onload = () => setBgImage(activePlanta, reader.result as string);
+        reader.onload = () => {
+          const src = reader.result as string;
+          // Both: add as layer AND set as bg for legacy support
+          addImageLayer(src, activePlanta);
+          setBgImage(activePlanta, src);
+        };
         reader.readAsDataURL(file);
       }
     };
@@ -279,14 +303,103 @@ export default function Toolbar() {
         </>
       )}
 
+      {/* ── Medidas personalizadas ── */}
+      <ToolGroup label="Medidas">
+        <ToolBtn
+          icon={<FiSettings />}
+          label="Líneas Guía"
+          active={showMeasures}
+          onClick={() => setShowMeasures(!showMeasures)}
+          color="blue"
+        />
+        {showMeasures && (
+          <div className="absolute top-11 left-0 z-50 bg-zinc-900 border border-zinc-700 rounded-lg p-3 shadow-2xl w-80">
+            <h3 className="text-[11px] font-bold text-zinc-300 mb-2 uppercase tracking-wider">
+              Agregar Línea Guía
+            </h3>
+            <div className="space-y-2">
+              <div>
+                <label className="text-[10px] text-zinc-500 uppercase">Eje</label>
+                <div className="flex gap-1 mt-1">
+                  <button
+                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${
+                      measureAxis === 'x'
+                        ? 'bg-green-500 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    onClick={() => setMeasureAxis('x')}
+                  >
+                    Vertical (X)
+                  </button>
+                  <button
+                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${
+                      measureAxis === 'y'
+                        ? 'bg-cyan-500 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    onClick={() => setMeasureAxis('y')}
+                  >
+                    Horizontal (Y)
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-zinc-500 uppercase">Medida (metros)</label>
+                <div className="flex gap-1.5 mt-1">
+                  <input
+                    type="number"
+                    className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-cyan-500"
+                    placeholder="ej: 2.10"
+                    value={measureInput}
+                    onChange={(e) => setMeasureInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddMeasure();
+                    }}
+                    step={0.05}
+                    min={0}
+                  />
+                  <button
+                    className="px-3 py-1.5 text-xs font-bold text-zinc-900 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-all"
+                    onClick={handleAddMeasure}
+                  >
+                    + Agregar
+                  </button>
+                </div>
+              </div>
+              <div className="bg-zinc-800/50 rounded-md p-2 text-[10px] text-zinc-400">
+                <div>✓ Línea verde: Vertical (X)</div>
+                <div>✓ Línea cian: Horizontal (Y)</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </ToolGroup>
+
       {/* ── Tracing active indicator ── */}
       {isTracing && (
         <>
           <Divider />
-          <div className="flex items-center gap-1 px-2 py-1 bg-cyan-500/15 rounded-md border border-cyan-500/30 animate-pulse">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-            <span className="text-[10px] text-cyan-300 font-medium">Trazando...</span>
-            <span className="text-[9px] text-cyan-500">Enter=cerrar · Esc=cancelar</span>
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-cyan-500/15 rounded-md border border-cyan-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="text-[10px] text-cyan-300 font-medium">
+              Trazando · {tracingPoints.length} pts
+            </span>
+            {tracingPoints.length >= 3 && (
+              <button
+                className="px-2 py-0.5 text-[10px] font-bold text-zinc-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-all"
+                onClick={requestFinish}
+                title="Cerrar polígono y nombrar (Enter)"
+              >
+                ✓ Cerrar polígono
+              </button>
+            )}
+            <button
+              className="px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
+              onClick={cancelTracing}
+              title="Cancelar trazado (Esc)"
+            >
+              ✕
+            </button>
           </div>
         </>
       )}

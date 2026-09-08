@@ -21,7 +21,6 @@ export default function SimulationModule() {
   const simRunning = useStore((s) => s.simRunning);
   const simSpeed = useStore((s) => s.simSpeed);
   const simTime = useStore((s) => s.simTime);
-  const simClients = useStore((s) => s.simClients);
   const showHeatmap = useStore((s) => s.showHeatmap);
   const setSimRunning = useStore((s) => s.setSimRunning);
   const setSimSpeed = useStore((s) => s.setSimSpeed);

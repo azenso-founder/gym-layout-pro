@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+/* ==========================================
+   GymLayout Pro — Estilos globales
+   ========================================== */
+
+/* Reset global para GymLayout Pro */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: #09090b;
+  color: #fafafa;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar dark */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Select styling */
+select {
+  appearance: none;
+  cursor: pointer;
+}
+
+/* Range slider */
+input[type="range"] {
+  height: 4px;
+  border-radius: 2px;
+  background: #27272a;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f97316;
+  cursor: pointer;
+  border: 2px solid #18181b;
+}
+
+/* Tooltip on hover */
+[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #27272a;
+  color: #e4e4e7;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 50;
+  pointer-events: none;
+  border: 1px solid #3f3f46;
+}
+
+/* Smooth transitions */
+.transition-smooth {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Tab pill active glow */
+.tab-active-glow {
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.15);
+}
+
+/* Divider */
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, #3f3f46, transparent);
+  margin: 0 8px;
+}
+
+/* Auth page backgrounds */
+.auth-bg {
+  background: radial-gradient(ellipse at 30% 20%, rgba(249, 115, 22, 0.08) 0%, transparent 50%),
+              radial-gradient(ellipse at 70% 80%, rgba(239, 68, 68, 0.06) 0%, transparent 50%),
+              #09090b;
+}
+
+/* Dashboard card hover */
+.project-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.project-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+}
+
+/* Glass effect */
+.glass {
+  backdrop-filter: blur(12px);
+  background: rgba(24, 24, 27, 0.8);
+  border: 1px solid rgba(63, 63, 70, 0.5);
+}
+
+/* Gradient button */
+.btn-gradient {
+  background: linear-gradient(135deg, #f97316, #ef4444);
+  transition: opacity 0.2s ease, transform 0.1s ease;
+}
+.btn-gradient:hover {
+  opacity: 0.9;
+}
+.btn-gradient:active {
+  transform: scale(0.98);
+}
+
+/* Save indicator pulse */
+@keyframes save-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.save-pulse {
+  animation: save-pulse 1.5s ease-in-out infinite;
+}
+
+/* Skeleton loading */
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #27272a 25%, #3f3f46 50%, #27272a 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}

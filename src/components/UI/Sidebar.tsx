@@ -7,6 +7,7 @@ import { FiSearch, FiPlus, FiChevronDown, FiChevronRight, FiGrid, FiCheck } from
 import useStore from '../../stores/useStore';
 import { CATEGORY_COLORS, CATEGORY_LABELS } from '../../types';
 import type { MachineCategory } from '../../types';
+import CreateMachineModal from './CreateMachineModal';
 
 export default function Sidebar() {
   const templates = useStore((s) => s.templates);
@@ -20,6 +21,7 @@ export default function Sidebar() {
   const getSuperficieDisponible = useStore((s) => s.getSuperficieDisponible);
 
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const supUsada = getSuperficieUsada(activePlanta);
   const supDisponible = getSuperficieDisponible(activePlanta);
@@ -128,7 +130,19 @@ export default function Sidebar() {
         >
           <FiGrid className="text-xs" /> Auto-colocar todas
         </button>
+
+        {/* Crear máquina personalizada */}
+        <button
+          className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-xs font-medium transition-all border border-cyan-500/20 hover:border-cyan-500/30"
+          onClick={() => setShowCreateModal(true)}
+          title="Crear una máquina con medidas personalizadas"
+        >
+          <FiPlus className="text-xs" /> Crear máquina personalizada
+        </button>
       </div>
+
+      {/* Modal */}
+      <CreateMachineModal open={showCreateModal} onClose={() => setShowCreateModal(false)} />
 
       {/* Lista de máquinas por categoría */}
       <div className="flex-1 overflow-y-auto py-1">

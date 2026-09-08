@@ -3,7 +3,7 @@
 // Soporte de selección de filas/columnas tipo Excel
 // ==========================================
 
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import useStore from '../../stores/useStore';
 import { SLP_CONFIG, CATEGORY_COLORS, CATEGORY_LABELS } from '../../types';
 import type { SLPRelation, MachineCategory } from '../../types';
@@ -187,8 +187,6 @@ function RelationMatrix({
 }) {
   // Selected cells for bulk editing: Set of "i,j" strings
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
-  // Whether we're in selection mode
-  const [selecting, setSelecting] = useState(false);
 
   if (machines.length < 2) {
     return (

@@ -9,7 +9,6 @@ import type {
   MachineInstance,
   SimClient,
   RoutineType,
-  ClientState,
   SimulationMetrics,
   MachineMetrics,
 } from '../types';
@@ -27,7 +26,7 @@ function triangular(min: number, moda: number, max: number): number {
 }
 
 /** Distribución exponencial (para llegadas Poisson) */
-function exponential(rate: number): number {
+export function exponential(rate: number): number {
   return -Math.log(1 - Math.random()) / rate;
 }
 
@@ -96,6 +95,10 @@ export class SimulationEngine {
     this.machines = machines.filter((m) => m.placed);
     this.seed = seed;
     this.state = this.initState();
+  }
+
+  public getSeed(): number {
+    return this.seed;
   }
 
   private initState(): SimState {
