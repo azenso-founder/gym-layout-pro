@@ -3,10 +3,9 @@
   "configurations": [
     {
       "name": "gym-layout-pro",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5173,
-      "autoPort": true
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "port": 3000
     }
   ]
 }
