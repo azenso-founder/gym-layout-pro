@@ -62,6 +62,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {[
             { href: '/dashboard', label: 'Proyectos', icon: '📁' },
             { href: '/templates', label: 'Templates', icon: '📋' },
+            { href: '/craft', label: 'CRAFT', icon: '🏭' },
           ].map((link) => (
             <Link
               key={link.href}

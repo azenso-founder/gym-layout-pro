@@ -2,6 +2,18 @@
 // GymLayout Pro — Tipos globales
 // ==========================================
 
+// Re-export CRAFT types
+export type {
+  CraftProblem,
+  CraftDepartment,
+  CraftLayoutState,
+  CraftIteration,
+  DistanceMetric,
+  LayoutMode,
+  FixedPoint,
+} from './craft';
+export { CRAFT_DEPT_COLORS, CRAFT_EXAMPLE_PROBLEM } from './craft';
+
 /** Categoría de máquina con color asociado */
 export type MachineCategory =
   | 'cardio'
