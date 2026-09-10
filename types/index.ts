@@ -62,6 +62,28 @@ export interface MachineTemplate {
   tiempoServicio: { min: number; moda: number; max: number }; // minutos
 }
 
+/** Lado de entrada/operación de una máquina */
+export type EntrySide = 'bottom' | 'top' | 'left' | 'right';
+
+/** Opciones de visualización individual por máquina */
+export interface MachineVisualOptions {
+  fillColor?: string;
+  fillOpacity?: number;
+  strokeColor?: string;
+  showHalo?: boolean;
+  haloColor?: string;
+  haloOpacity?: number;
+  haloOffsetX?: number;
+  haloOffsetY?: number;
+  haloScale?: number;
+  showArrow?: boolean;
+  arrowColor?: string;
+  entrySide?: EntrySide;
+  showLabel?: boolean;
+  labelSize?: number;
+  labelColor?: string;
+}
+
 /** Instancia de máquina colocada en el plano */
 export interface MachineInstance {
   id: string;
@@ -81,6 +103,8 @@ export interface MachineInstance {
   placed: boolean;   // si ya fue colocada en el plano
   tiempoServicio: { min: number; moda: number; max: number };
   capacidad: number; // personas simultáneas
+  visual?: MachineVisualOptions;
+  layer?: string;    // ID de capa a la que pertenece (default: 'default')
 }
 
 /** Zona del gimnasio */
@@ -177,6 +201,7 @@ export interface FloorRoom {
   color: string;
   visible: boolean;
   locked: boolean;
+  layer?: string;  // capa a la que pertenece (default = 'default')
 }
 
 /** Calibración de imagen de fondo por planta */
@@ -195,7 +220,7 @@ export interface ImgCalibration {
 export type EditorTool = 'select' | 'move' | 'rotate' | 'measure' | 'zone' | 'pan' | 'trace';
 
 /** Paso del grid de snap */
-export type SnapGrid = 0.25 | 0.50 | 1.00;
+export type SnapGrid = 0.01 | 0.05 | 0.10 | 0.25 | 0.50 | 1.00;
 
 /** Capa de imagen de fondo (editable) */
 export interface ImageLayer {
@@ -209,6 +234,30 @@ export interface ImageLayer {
   visible: boolean;
   locked: boolean;
   rotation: number;      // grados
+}
+
+/** Línea de tráfico (ruta de circulación libre) */
+export interface TrafficLine {
+  id: string;
+  planta: 'baja' | 'alta';
+  points: { x: number; y: number }[]; // canvas pixels
+  color: string;
+  width: number;          // ancho de línea en px
+  dashPattern: 'solid' | 'dashed' | 'dotted';
+  label: string;
+  layer: string;          // capa a la que pertenece
+  visible: boolean;
+  locked: boolean;
+}
+
+/** Capa del canvas (agrupación lógica) */
+export interface CanvasLayer {
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  color: string;          // color indicador de la capa
+  order: number;          // orden de renderizado (menor = más abajo)
 }
 
 /** Medida de referencia personalizada (línea guía) */

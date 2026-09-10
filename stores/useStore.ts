@@ -20,6 +20,8 @@ import type {
   ImgCalibration,
   ImageLayer,
   CustomMeasure,
+  TrafficLine,
+  CanvasLayer,
 } from '@/types';
 import { ALL_DEFAULT_MACHINES, PLANTA_INFO } from '@/data/machines';
 
@@ -52,6 +54,8 @@ interface SavedState {
   showGuerchetHalo: boolean;
   canvasScale: number;
   canvasOffset: { x: number; y: number };
+  canvasLayers?: CanvasLayer[];
+  trafficLines?: TrafficLine[];
   savedAt: number;
 }
 
@@ -62,6 +66,16 @@ function loadSavedState(): Partial<SavedState> | null {
     const parsed = JSON.parse(raw) as SavedState;
     // Only restore if saved within last 30 days
     if (Date.now() - parsed.savedAt > 30 * 24 * 60 * 60 * 1000) return null;
+    // Migración: asegurar que siempre exista la capa "Principal" por defecto
+    const DEFAULT_LAYER: CanvasLayer = { id: 'default', name: 'Principal', visible: true, locked: false, color: '#F97316', order: 0 };
+    if (!parsed.canvasLayers || parsed.canvasLayers.length === 0) {
+      parsed.canvasLayers = [DEFAULT_LAYER];
+    } else if (!parsed.canvasLayers.find((l: any) => l.id === 'default')) {
+      parsed.canvasLayers.unshift(DEFAULT_LAYER);
+    }
+    if (!parsed.trafficLines) {
+      parsed.trafficLines = [];
+    }
     return parsed;
   } catch {
     return null;
@@ -90,6 +104,8 @@ function debouncedSave(state: AppState) {
         showGuerchetHalo: state.showGuerchetHalo,
         canvasScale: state.canvasScale,
         canvasOffset: state.canvasOffset,
+        canvasLayers: state.canvasLayers,
+        trafficLines: state.trafficLines,
         savedAt: Date.now(),
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(toSave));
@@ -132,6 +148,9 @@ const ROOM_COLORS = [
 interface HistoryEntry {
   machines: MachineInstance[];
   zones: Zone[];
+  floorRooms: FloorRoom[];
+  trafficLines: TrafficLine[];
+  imageLayers: ImageLayer[];
 }
 
 interface AppState {
@@ -205,8 +224,40 @@ interface AppState {
   // === Image Layers ===
   imageLayers: ImageLayer[];
   selectedImageId: string | null;
+
+  // === Traffic Lines ===
+  trafficLines: TrafficLine[];
+  addTrafficLine: (line: Omit<TrafficLine, 'id'>) => void;
+  removeTrafficLine: (id: string) => void;
+  updateTrafficLine: (id: string, updates: Partial<TrafficLine>) => void;
+  toggleTrafficLineVisibility: (id: string) => void;
+
+  // === Canvas Layers ===
+  canvasLayers: CanvasLayer[];
+  activeLayerId: string;
+  setActiveLayer: (id: string) => void;
+  addCanvasLayer: (name: string, color?: string) => void;
+  removeCanvasLayer: (id: string) => void;
+  toggleCanvasLayerVisibility: (id: string) => void;
+  toggleCanvasLayerLock: (id: string) => void;
+  assignMachinesToLayer: (machineIds: string[], layerId: string) => void;
+  assignRoomToLayer: (roomId: string, layerId: string) => void;
+  assignTrafficLineToLayer: (lineId: string, layerId: string) => void;
+
+  // === Traffic tracing ===
+  tracingMode: 'room' | 'traffic';
+  finishTrafficTracing: (label: string) => void;
+
+  // === Overlap & Flow ===
+  showOverlaps: boolean;
+  toggleShowOverlaps: () => void;
+  showTrafficFlow: boolean;
+  toggleTrafficFlow: () => void;
+  trafficFlowSpeed: number;
+  setTrafficFlowSpeed: (v: number) => void;
+
   // Tracing actions
-  startTracing: () => void;
+  startTracing: (mode?: 'room' | 'traffic') => void;
   addTracingPoint: (x: number, y: number) => void;
   undoTracingPoint: () => void;
   requestFinish: () => void;
@@ -628,6 +679,7 @@ const useStore = create<AppState>((set, get) => ({
   tracingPoints: [],
   isTracing: false,
   pendingFinish: false,
+  tracingMode: 'room' as 'room' | 'traffic',
 
   // === Image Layers ===
   imageLayers: saved?.imageLayers ?? [],
@@ -636,7 +688,76 @@ const useStore = create<AppState>((set, get) => ({
   // === Custom Measures ===
   customMeasures: saved?.customMeasures ?? [],
 
-  startTracing: () => set({ isTracing: true, tracingPoints: [], pendingFinish: false, activeTool: 'trace' as EditorTool }),
+  // === Traffic Lines ===
+  trafficLines: saved?.trafficLines ?? [],
+
+  // === Canvas Layers ===
+  canvasLayers: saved?.canvasLayers ?? [
+    { id: 'default', name: 'Principal', visible: true, locked: false, color: '#F97316', order: 0 },
+  ],
+  activeLayerId: 'default',
+  setActiveLayer: (id) => set({ activeLayerId: id }),
+  addCanvasLayer: (name, color) => {
+    set((s) => ({
+      canvasLayers: [
+        ...s.canvasLayers,
+        { id: uuid(), name, visible: true, locked: false, color: color ?? '#3B82F6', order: s.canvasLayers.length },
+      ],
+    }));
+  },
+  removeCanvasLayer: (id) => {
+    if (id === 'default') return;
+    set((s) => ({
+      canvasLayers: s.canvasLayers.filter((l) => l.id !== id),
+      activeLayerId: s.activeLayerId === id ? 'default' : s.activeLayerId,
+      machines: s.machines.map((m) =>
+        m.layer === id ? { ...m, layer: 'default' } : m
+      ),
+      trafficLines: s.trafficLines.map((l) =>
+        l.layer === id ? { ...l, layer: 'default' } : l
+      ),
+      floorRooms: s.floorRooms.map((r) =>
+        r.layer === id ? { ...r, layer: 'default' } : r
+      ),
+    }));
+  },
+  toggleCanvasLayerVisibility: (id) => {
+    set((s) => ({
+      canvasLayers: s.canvasLayers.map((l) =>
+        l.id === id ? { ...l, visible: !l.visible } : l
+      ),
+    }));
+  },
+  toggleCanvasLayerLock: (id) => {
+    set((s) => ({
+      canvasLayers: s.canvasLayers.map((l) =>
+        l.id === id ? { ...l, locked: !l.locked } : l
+      ),
+    }));
+  },
+  assignMachinesToLayer: (machineIds, layerId) => {
+    set((s) => ({
+      machines: s.machines.map((m) =>
+        machineIds.includes(m.id) ? { ...m, layer: layerId } : m
+      ),
+    }));
+  },
+  assignRoomToLayer: (roomId, layerId) => {
+    set((s) => ({
+      floorRooms: s.floorRooms.map((r) =>
+        r.id === roomId ? { ...r, layer: layerId } : r
+      ),
+    }));
+  },
+  assignTrafficLineToLayer: (lineId, layerId) => {
+    set((s) => ({
+      trafficLines: s.trafficLines.map((l) =>
+        l.id === lineId ? { ...l, layer: layerId } : l
+      ),
+    }));
+  },
+
+  startTracing: (mode) => set({ isTracing: true, tracingPoints: [], pendingFinish: false, activeTool: 'trace' as EditorTool, tracingMode: mode ?? 'room' }),
 
   addTracingPoint: (x, y) => {
     const { tracingPoints, snapGrid: sg } = get();
@@ -666,15 +787,17 @@ const useStore = create<AppState>((set, get) => ({
   },
 
   requestFinish: () => {
-    const { tracingPoints } = get();
-    if (tracingPoints.length >= 3) {
+    const { tracingPoints, tracingMode } = get();
+    const minPts = tracingMode === 'traffic' ? 2 : 3;
+    if (tracingPoints.length >= minPts) {
       set({ pendingFinish: true });
     }
   },
 
   finishTracing: (name, color) => {
-    const { tracingPoints, activePlanta, floorRooms } = get();
+    const { tracingPoints, activePlanta, floorRooms, activeLayerId } = get();
     if (tracingPoints.length < 3) return;
+    get().pushHistory();
     const roomColor = color || ROOM_COLORS[floorRooms.length % ROOM_COLORS.length];
     const room: FloorRoom = {
       id: uuid(),
@@ -684,6 +807,7 @@ const useStore = create<AppState>((set, get) => ({
       color: roomColor,
       visible: true,
       locked: false,
+      layer: activeLayerId,
     };
     set({
       floorRooms: [...floorRooms, room],
@@ -692,6 +816,32 @@ const useStore = create<AppState>((set, get) => ({
       pendingFinish: false,
       activeTool: 'select',
     });
+  },
+
+  finishTrafficTracing: (label) => {
+    const { tracingPoints, activePlanta, trafficLines, activeLayerId } = get();
+    if (tracingPoints.length < 2) return;
+    get().pushHistory();
+    const TRAFFIC_COLORS = ['#FBBF24', '#60A5FA', '#34D399', '#F87171', '#A78BFA', '#FB923C'];
+    const color = TRAFFIC_COLORS[trafficLines.length % TRAFFIC_COLORS.length];
+    const line: Omit<TrafficLine, 'id'> = {
+      planta: activePlanta,
+      points: [...tracingPoints],
+      color,
+      width: 2,
+      dashPattern: 'dashed',
+      label,
+      layer: activeLayerId,
+      visible: true,
+      locked: false,
+    };
+    set((s) => ({
+      trafficLines: [...s.trafficLines, { ...line, id: uuid() }],
+      tracingPoints: [],
+      isTracing: false,
+      pendingFinish: false,
+      activeTool: 'select' as EditorTool,
+    }));
   },
 
   cancelTracing: () => set({ tracingPoints: [], isTracing: false, pendingFinish: false, activeTool: 'select' }),
@@ -711,8 +861,10 @@ const useStore = create<AppState>((set, get) => ({
     set({ floorRooms: [...floorRooms, room] });
   },
 
-  removeFloorRoom: (id) =>
-    set((s) => ({ floorRooms: s.floorRooms.filter((r) => r.id !== id) })),
+  removeFloorRoom: (id) => {
+    get().pushHistory();
+    set((s) => ({ floorRooms: s.floorRooms.filter((r) => r.id !== id) }));
+  },
 
   renameFloorRoom: (id, name) =>
     set((s) => ({
@@ -802,6 +954,7 @@ const useStore = create<AppState>((set, get) => ({
 
   // === Image Layers ===
   addImageLayer: (src, planta) => {
+    get().pushHistory();
     const layer: ImageLayer = {
       id: uuid(),
       planta,
@@ -817,11 +970,13 @@ const useStore = create<AppState>((set, get) => ({
     set((s) => ({ imageLayers: [...s.imageLayers, layer] }));
   },
 
-  removeImageLayer: (id) =>
+  removeImageLayer: (id) => {
+    get().pushHistory();
     set((s) => ({
       imageLayers: s.imageLayers.filter((l) => l.id !== id),
       selectedImageId: s.selectedImageId === id ? null : s.selectedImageId,
-    })),
+    }));
+  },
 
   setSelectedImage: (id) =>
     set({ selectedImageId: id, selectedMachineId: null, selectedMachineIds: [], selectedRoomId: null }),
@@ -956,14 +1111,53 @@ const useStore = create<AppState>((set, get) => ({
   setBgOpacity: (o) => set({ bgOpacity: o }),
   toggleBg: () => set((s) => ({ showBg: !s.showBg })),
 
+  // === Overlap & Flow ===
+  showOverlaps: false,
+  toggleShowOverlaps: () => set((s) => ({ showOverlaps: !s.showOverlaps })),
+  showTrafficFlow: false,
+  toggleTrafficFlow: () => set((s) => ({ showTrafficFlow: !s.showTrafficFlow })),
+  trafficFlowSpeed: 1,
+  setTrafficFlowSpeed: (v) => set({ trafficFlowSpeed: v }),
+
+  // === Traffic Lines CRUD ===
+  addTrafficLine: (line) => {
+    get().pushHistory();
+    set((s) => ({
+      trafficLines: [...s.trafficLines, { ...line, id: uuid() }],
+    }));
+  },
+  removeTrafficLine: (id) => {
+    get().pushHistory();
+    set((s) => ({
+      trafficLines: s.trafficLines.filter((l) => l.id !== id),
+    }));
+  },
+  updateTrafficLine: (id, updates) => {
+    set((s) => ({
+      trafficLines: s.trafficLines.map((l) =>
+        l.id === id ? { ...l, ...updates } : l
+      ),
+    }));
+  },
+  toggleTrafficLineVisibility: (id) => {
+    set((s) => ({
+      trafficLines: s.trafficLines.map((l) =>
+        l.id === id ? { ...l, visible: !l.visible } : l
+      ),
+    }));
+  },
+
   // === Undo/Redo ===
   history: [],
   historyIndex: -1,
   pushHistory: () => {
-    const { machines, zones, history, historyIndex } = get();
+    const { machines, zones, floorRooms, trafficLines, imageLayers, history, historyIndex } = get();
     const entry: HistoryEntry = {
       machines: JSON.parse(JSON.stringify(machines)),
       zones: JSON.parse(JSON.stringify(zones)),
+      floorRooms: JSON.parse(JSON.stringify(floorRooms)),
+      trafficLines: JSON.parse(JSON.stringify(trafficLines)),
+      imageLayers: JSON.parse(JSON.stringify(imageLayers.map(({ src, ...rest }) => rest))),
     };
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(entry);
@@ -971,22 +1165,36 @@ const useStore = create<AppState>((set, get) => ({
     set({ history: newHistory, historyIndex: newHistory.length - 1 });
   },
   undo: () => {
-    const { history, historyIndex } = get();
+    const { history, historyIndex, imageLayers: currentImages } = get();
     if (historyIndex < 0) return;
     const entry = history[historyIndex];
+    const restoredImages = JSON.parse(JSON.stringify(entry.imageLayers)).map((img: ImageLayer) => {
+      const current = currentImages.find((c) => c.id === img.id);
+      return current ? { ...img, src: current.src } : img;
+    });
     set({
       machines: JSON.parse(JSON.stringify(entry.machines)),
       zones: JSON.parse(JSON.stringify(entry.zones)),
+      floorRooms: JSON.parse(JSON.stringify(entry.floorRooms)),
+      trafficLines: JSON.parse(JSON.stringify(entry.trafficLines)),
+      imageLayers: restoredImages,
       historyIndex: historyIndex - 1,
     });
   },
   redo: () => {
-    const { history, historyIndex } = get();
+    const { history, historyIndex, imageLayers: currentImages } = get();
     if (historyIndex >= history.length - 1) return;
     const entry = history[historyIndex + 1];
+    const restoredImages = JSON.parse(JSON.stringify(entry.imageLayers)).map((img: ImageLayer) => {
+      const current = currentImages.find((c) => c.id === img.id);
+      return current ? { ...img, src: current.src } : img;
+    });
     set({
       machines: JSON.parse(JSON.stringify(entry.machines)),
       zones: JSON.parse(JSON.stringify(entry.zones)),
+      floorRooms: JSON.parse(JSON.stringify(entry.floorRooms)),
+      trafficLines: JSON.parse(JSON.stringify(entry.trafficLines)),
+      imageLayers: restoredImages,
       historyIndex: historyIndex + 1,
     });
   },
@@ -1015,6 +1223,8 @@ const useStore = create<AppState>((set, get) => ({
       floorRooms: [],
       imageLayers: [],
       customMeasures: [],
+      trafficLines: [],
+      canvasLayers: [{ id: 'default', name: 'Principal', visible: true, locked: false, color: '#F97316', order: 0 }],
       slpRelations: {},
       imgCalibrations: { ...DEFAULT_IMG_CALIBRATIONS },
       lastSaved: null,

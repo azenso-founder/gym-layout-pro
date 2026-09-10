@@ -7,7 +7,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Stage, Layer, Rect, Line, Circle, Group, Text, Image as KonvaImage, RegularPolygon } from 'react-konva';
 import useStore, { m2px, px2m, PIXELS_PER_METER } from '@/stores/useStore';
 import { CATEGORY_COLORS, CLIENT_STATE_COLORS } from '@/types';
-import type { FloorRoom, ImageLayer } from '@/types';
+import type { FloorRoom, ImageLayer, TrafficLine } from '@/types';
 import { calcularHaloRadius, getOperativeSides } from '@/engine/guerchet';
 import { PLANTA_INFO } from '@/data/machines';
 import useImage from '@/utils/useImage';
@@ -68,6 +68,19 @@ export default function LayoutCanvas() {
   const setSelectedImage = useStore((s) => s.setSelectedImage);
   const updateImageLayer = useStore((s) => s.updateImageLayer);
 
+  // Traffic lines
+  const trafficLines = useStore((s) => s.trafficLines);
+  const finishTrafficTracing = useStore((s) => s.finishTrafficTracing);
+  const tracingMode = useStore((s) => s.tracingMode);
+
+  // Canvas layers
+  const canvasLayers = useStore((s) => s.canvasLayers);
+
+  // Overlap & flow
+  const showOverlaps = useStore((s) => s.showOverlaps);
+  const showTrafficFlow = useStore((s) => s.showTrafficFlow);
+  const trafficFlowSpeed = useStore((s) => s.trafficFlowSpeed);
+
   // Image calibration
   const imgCalibrations = useStore((s) => s.imgCalibrations);
   const imgCal = imgCalibrations[activePlanta];
@@ -82,6 +95,75 @@ export default function LayoutCanvas() {
     () => machines.filter((m) => m.planta === activePlanta),
     [machines, activePlanta]
   );
+
+  // AABB overlap detection
+  const overlapRects = useMemo(() => {
+    if (!showOverlaps) return [];
+    const rects: { x: number; y: number; w: number; h: number; ids: [string, string] }[] = [];
+    for (let i = 0; i < plantaMachines.length; i++) {
+      const a = plantaMachines[i];
+      if (!a.placed) continue;
+      const aw = m2px(a.largo);
+      const ah = m2px(a.ancho);
+      const rad = (a.rotation * Math.PI) / 180;
+      const cosA = Math.abs(Math.cos(rad));
+      const sinA = Math.abs(Math.sin(rad));
+      const aabbW = aw * cosA + ah * sinA;
+      const aabbH = aw * sinA + ah * cosA;
+      const ax1 = a.x - aabbW / 2;
+      const ay1 = a.y - aabbH / 2;
+      const ax2 = a.x + aabbW / 2;
+      const ay2 = a.y + aabbH / 2;
+
+      for (let j = i + 1; j < plantaMachines.length; j++) {
+        const b = plantaMachines[j];
+        if (!b.placed) continue;
+        const bw = m2px(b.largo);
+        const bh = m2px(b.ancho);
+        const radB = (b.rotation * Math.PI) / 180;
+        const cosB = Math.abs(Math.cos(radB));
+        const sinB = Math.abs(Math.sin(radB));
+        const babbW = bw * cosB + bh * sinB;
+        const babbH = bw * sinB + bh * cosB;
+        const bx1 = b.x - babbW / 2;
+        const by1 = b.y - babbH / 2;
+        const bx2 = b.x + babbW / 2;
+        const by2 = b.y + babbH / 2;
+
+        const ix1 = Math.max(ax1, bx1);
+        const iy1 = Math.max(ay1, by1);
+        const ix2 = Math.min(ax2, bx2);
+        const iy2 = Math.min(ay2, by2);
+
+        if (ix1 < ix2 && iy1 < iy2) {
+          rects.push({ x: ix1, y: iy1, w: ix2 - ix1, h: iy2 - iy1, ids: [a.id, b.id] });
+        }
+      }
+    }
+    return rects;
+  }, [plantaMachines, showOverlaps]);
+
+  const overlappingIds = useMemo(() => {
+    const set = new Set<string>();
+    overlapRects.forEach((r) => { set.add(r.ids[0]); set.add(r.ids[1]); });
+    return set;
+  }, [overlapRects]);
+
+  // Traffic flow animation
+  const [flowPhase, setFlowPhase] = useState(0);
+  useEffect(() => {
+    if (!showTrafficFlow) return;
+    let animFrame: number;
+    let lastTime = performance.now();
+    const animate = (time: number) => {
+      const dt = (time - lastTime) / 1000;
+      lastTime = time;
+      setFlowPhase((p) => (p + dt * trafficFlowSpeed * 60) % 1000);
+      animFrame = requestAnimationFrame(animate);
+    };
+    animFrame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animFrame);
+  }, [showTrafficFlow, trafficFlowSpeed]);
 
   // Load floor plan background image
   const bgSrc = showBg ? bgImages[activePlanta] : null;
@@ -275,6 +357,18 @@ export default function LayoutCanvas() {
 
   // Handle machine click (single, ctrl, shift)
   const handleMachineClick = (machineId: string, e: any) => {
+    // During tracing, add point instead of selecting
+    if (activeTool === 'trace' && isTracing) {
+      const stage = stageRef.current;
+      const pointer = stage?.getPointerPosition();
+      if (pointer) {
+        const canvasX = (pointer.x - canvasOffset.x) / canvasScale;
+        const canvasY = (pointer.y - canvasOffset.y) / canvasScale;
+        addTracingPoint(canvasX, canvasY);
+      }
+      return; // Don't select, don't cancel bubble
+    }
+
     e.cancelBubble = true;
     const evt = e.evt as MouseEvent;
     if (evt.ctrlKey || evt.metaKey) {
@@ -439,6 +533,10 @@ export default function LayoutCanvas() {
         <Layer>
           {floorRooms
             .filter((r) => r.planta === activePlanta && r.visible)
+            .filter((r) => {
+              const layer = canvasLayers.find((l) => l.id === (r.layer || 'default'));
+              return !layer || layer.visible;
+            })
             .map((room) => (
               <FloorRoomShape
                 key={room.id}
@@ -459,7 +557,7 @@ export default function LayoutCanvas() {
         {/* Tracing preview (polygon being drawn) */}
         {isTracing && activeTool === 'trace' && tracingPoints.length > 0 && (
           <Layer listening={false}>
-            <TracingPreview points={tracingPoints} />
+            <TracingPreview points={tracingPoints} mode={tracingMode} />
           </Layer>
         )}
 
@@ -470,9 +568,127 @@ export default function LayoutCanvas() {
           </Layer>
         )}
 
+        {/* Traffic Lines (rendered paths) */}
+        <Layer listening={false}>
+          {trafficLines
+            .filter((tl) => tl.planta === activePlanta && tl.visible)
+            .filter((tl) => {
+              const layer = canvasLayers.find((l) => l.id === tl.layer);
+              return !layer || layer.visible;
+            })
+            .map((tl) => {
+              const flatPts = tl.points.flatMap((p) => [p.x, p.y]);
+              const dashMap: Record<string, number[]> = {
+                solid: [],
+                dashed: [10, 5],
+                dotted: [3, 3],
+              };
+              return (
+                <Group key={tl.id}>
+                  <Line
+                    points={flatPts}
+                    stroke={tl.color}
+                    strokeWidth={tl.width}
+                    dash={dashMap[tl.dashPattern] || []}
+                    lineCap="round"
+                    lineJoin="round"
+                    opacity={0.8}
+                  />
+                  {/* Arrow heads at each segment */}
+                  {tl.points.length >= 2 && tl.points.slice(1).map((p, i) => {
+                    const prev = tl.points[i];
+                    const angle = Math.atan2(p.y - prev.y, p.x - prev.x);
+                    const arrowLen = 8;
+                    return (
+                      <Line
+                        key={`arr-${i}`}
+                        points={[
+                          p.x - arrowLen * Math.cos(angle - 0.4),
+                          p.y - arrowLen * Math.sin(angle - 0.4),
+                          p.x,
+                          p.y,
+                          p.x - arrowLen * Math.cos(angle + 0.4),
+                          p.y - arrowLen * Math.sin(angle + 0.4),
+                        ]}
+                        stroke={tl.color}
+                        strokeWidth={1.5}
+                        lineCap="round"
+                        lineJoin="round"
+                        opacity={0.6}
+                      />
+                    );
+                  })}
+                  {/* Label */}
+                  {tl.label && tl.points.length >= 2 && (() => {
+                    const mid = tl.points[Math.floor(tl.points.length / 2)];
+                    return (
+                      <>
+                        <Rect
+                          x={mid.x - 25}
+                          y={mid.y - 16}
+                          width={50}
+                          height={14}
+                          fill="#000000CC"
+                          cornerRadius={2}
+                        />
+                        <Text
+                          x={mid.x - 25}
+                          y={mid.y - 14}
+                          width={50}
+                          text={tl.label}
+                          fill={tl.color}
+                          fontSize={8}
+                          fontStyle="bold"
+                          align="center"
+                        />
+                      </>
+                    );
+                  })()}
+                </Group>
+              );
+            })}
+        </Layer>
+
+        {/* Traffic flow animation */}
+        {showTrafficFlow && (
+          <Layer listening={false}>
+            {trafficLines
+              .filter((tl) => tl.planta === activePlanta && tl.visible)
+              .map((tl) => {
+                // Animate dots along path
+                const dots: React.JSX.Element[] = [];
+                for (let si = 0; si < tl.points.length - 1; si++) {
+                  const a = tl.points[si];
+                  const b = tl.points[si + 1];
+                  const segLen = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+                  const numDots = Math.max(1, Math.floor(segLen / 30));
+                  for (let d = 0; d < numDots; d++) {
+                    const t = ((flowPhase / 50 + d / numDots + si * 0.3) % 1);
+                    const x = a.x + (b.x - a.x) * t;
+                    const y = a.y + (b.y - a.y) * t;
+                    dots.push(
+                      <Circle
+                        key={`flow-${tl.id}-${si}-${d}`}
+                        x={x}
+                        y={y}
+                        radius={3}
+                        fill={tl.color}
+                        opacity={0.7}
+                      />
+                    );
+                  }
+                }
+                return <Group key={`flow-${tl.id}`}>{dots}</Group>;
+              })}
+          </Layer>
+        )}
+
         {/* Machines */}
         <Layer>
-          {plantaMachines.map((machine) => {
+          {plantaMachines.filter((machine) => {
+            const machineLayer = canvasLayers.find((l) => l.id === (machine.layer || 'default'));
+            return !machineLayer || machineLayer.visible;
+          }).map((machine) => {
             const isSelected = selectedMachineIds.includes(machine.id);
             const isPrimary = machine.id === selectedMachineId;
             const w = m2px(machine.largo);
@@ -488,7 +704,7 @@ export default function LayoutCanvas() {
                 x={machine.x}
                 y={machine.y}
                 rotation={machine.rotation}
-                draggable={!machine.locked}
+                draggable={!machine.locked && !isTracing}
                 onClick={(e) => handleMachineClick(machine.id, e)}
                 onDragStart={() => {
                   useStore.getState().pushHistory();
@@ -523,11 +739,11 @@ export default function LayoutCanvas() {
                   width={w}
                   height={h}
                   fill={color + (isSelected ? 'CC' : '80')}
-                  stroke={isPrimary ? '#fff' : isSelected ? '#f97316' : color}
+                  stroke={showOverlaps && overlappingIds.has(machine.id) ? '#EF4444' : isPrimary ? '#fff' : isSelected ? '#f97316' : color}
                   strokeWidth={isSelected ? 2 : 1}
                   cornerRadius={3}
-                  shadowBlur={isSelected ? 10 : 0}
-                  shadowColor={isPrimary ? '#fff' : '#f97316'}
+                  shadowBlur={isSelected ? 10 : showOverlaps && overlappingIds.has(machine.id) ? 8 : 0}
+                  shadowColor={showOverlaps && overlappingIds.has(machine.id) ? '#EF4444' : isPrimary ? '#fff' : '#f97316'}
                   shadowOpacity={0.4}
                 />
 
@@ -600,6 +816,33 @@ export default function LayoutCanvas() {
           })}
         </Layer>
 
+        {/* Overlap warnings */}
+        {showOverlaps && overlapRects.length > 0 && (
+          <Layer listening={false}>
+            {overlapRects.map((r, i) => (
+              <Group key={`overlap-${i}`}>
+                <Rect
+                  x={r.x}
+                  y={r.y}
+                  width={r.w}
+                  height={r.h}
+                  fill="#EF444440"
+                  stroke="#EF4444"
+                  strokeWidth={1.5}
+                  dash={[4, 2]}
+                />
+                <Text
+                  x={r.x + r.w / 2 - 6}
+                  y={r.y + r.h / 2 - 6}
+                  text="⚠"
+                  fontSize={12}
+                  fill="#EF4444"
+                />
+              </Group>
+            ))}
+          </Layer>
+        )}
+
         {/* Simulation clients */}
         {activeTab === 'simulacion' && (
           <Layer listening={false}>
@@ -642,9 +885,23 @@ export default function LayoutCanvas() {
       {/* Naming overlay for finishing a traced polygon */}
       {pendingFinish && (
         <RoomNameInput
-          onSubmit={(name) => finishTracing(name)}
+          onSubmit={(name) => {
+            if (tracingMode === 'traffic') {
+              finishTrafficTracing(name);
+            } else {
+              finishTracing(name);
+            }
+          }}
           onCancel={() => useStore.setState({ pendingFinish: false })}
-          defaultName={`Recinto ${floorRooms.length + 1}`}
+          defaultName={tracingMode === 'traffic'
+            ? `Ruta ${trafficLines.length + 1}`
+            : `Recinto ${floorRooms.length + 1}`
+          }
+          title={tracingMode === 'traffic' ? 'Nombrar ruta de tráfico' : 'Nombrar recinto'}
+          subtitle={tracingMode === 'traffic'
+            ? 'La línea de tráfico será guardada como ruta de circulación.'
+            : 'El polígono se cerrará y calculará su superficie.'
+          }
         />
       )}
 
@@ -1096,13 +1353,15 @@ function FloorRoomShape({
 }
 
 // ---- Tracing Preview (polygon being drawn) ----
-function TracingPreview({ points }: { points: { x: number; y: number }[] }) {
+function TracingPreview({ points, mode }: { points: { x: number; y: number }[]; mode: 'room' | 'traffic' }) {
   if (points.length === 0) return null;
 
+  const isTraffic = mode === 'traffic';
+  const color = isTraffic ? '#FBBF24' : '#22D3EE';
   const flatPoints = points.flatMap((p) => [p.x, p.y]);
 
-  // Preview area if we have 3+ points
-  const previewArea = points.length >= 3
+  // Preview area if we have 3+ points (room mode only)
+  const previewArea = !isTraffic && points.length >= 3
     ? (() => {
         const n = points.length;
         let area = 0;
@@ -1123,34 +1382,58 @@ function TracingPreview({ points }: { points: { x: number; y: number }[] }) {
       {/* Connecting lines */}
       <Line
         points={flatPoints}
-        stroke="#22D3EE"
+        stroke={color}
         strokeWidth={2}
         dash={[8, 4]}
       />
 
-      {/* Closing line preview (dashed, to first point) */}
-      {points.length >= 3 && (
+      {/* Closing line preview (room mode only) */}
+      {!isTraffic && points.length >= 3 && (
         <Line
           points={[
             points[points.length - 1].x, points[points.length - 1].y,
             points[0].x, points[0].y,
           ]}
-          stroke="#22D3EE"
+          stroke={color}
           strokeWidth={1}
           dash={[4, 4]}
           opacity={0.4}
         />
       )}
 
-      {/* Fill preview */}
-      {points.length >= 3 && (
+      {/* Fill preview (room mode only) */}
+      {!isTraffic && points.length >= 3 && (
         <Line
           points={flatPoints}
           closed
-          fill="#22D3EE10"
+          fill={color + '10'}
           stroke="transparent"
         />
       )}
+
+      {/* Arrow heads for traffic mode */}
+      {isTraffic && points.length >= 2 && points.slice(1).map((p, i) => {
+        const prev = points[i];
+        const angle = Math.atan2(p.y - prev.y, p.x - prev.x);
+        const arrowLen = 10;
+        return (
+          <Line
+            key={`tarr-${i}`}
+            points={[
+              p.x - arrowLen * Math.cos(angle - 0.4),
+              p.y - arrowLen * Math.sin(angle - 0.4),
+              p.x,
+              p.y,
+              p.x - arrowLen * Math.cos(angle + 0.4),
+              p.y - arrowLen * Math.sin(angle + 0.4),
+            ]}
+            stroke={color}
+            strokeWidth={2}
+            lineCap="round"
+            lineJoin="round"
+          />
+        );
+      })}
 
       {/* Edge dimensions */}
       {points.map((p, i) => {
@@ -1182,7 +1465,7 @@ function TracingPreview({ points }: { points: { x: number; y: number }[] }) {
               y={my + ny * off - 5}
               width={40}
               text={label}
-              fill="#22D3EE"
+              fill={color}
               fontSize={9}
               fontStyle="bold"
               align="center"
@@ -1198,26 +1481,26 @@ function TracingPreview({ points }: { points: { x: number; y: number }[] }) {
           x={p.x}
           y={p.y}
           radius={i === 0 ? 5 : 3.5}
-          fill={i === 0 ? '#22D3EE' : '#22D3EECC'}
+          fill={i === 0 ? color : color + 'CC'}
           stroke="#fff"
           strokeWidth={i === 0 ? 1.5 : 0.5}
         />
       ))}
 
-      {/* First point highlight (close target) */}
-      {points.length >= 3 && (
+      {/* First point highlight (close target, room mode only) */}
+      {!isTraffic && points.length >= 3 && (
         <Circle
           x={points[0].x}
           y={points[0].y}
           radius={10}
-          stroke="#22D3EE"
+          stroke={color}
           strokeWidth={1}
           dash={[3, 3]}
           opacity={0.5}
         />
       )}
 
-      {/* Preview area label */}
+      {/* Preview area label (room mode only) */}
       {previewArea > 0 && (
         <Group>
           <Rect
@@ -1233,7 +1516,31 @@ function TracingPreview({ points }: { points: { x: number; y: number }[] }) {
             y={cy - 6}
             width={50}
             text={`≈${previewArea.toFixed(1)} m²`}
-            fill="#22D3EE"
+            fill={color}
+            fontSize={9}
+            fontStyle="bold"
+            align="center"
+          />
+        </Group>
+      )}
+
+      {/* Traffic mode: point count */}
+      {isTraffic && points.length >= 2 && (
+        <Group>
+          <Rect
+            x={cx - 20}
+            y={cy - 8}
+            width={40}
+            height={16}
+            fill="#000000CC"
+            cornerRadius={3}
+          />
+          <Text
+            x={cx - 20}
+            y={cy - 6}
+            width={40}
+            text={`${points.length} pts`}
+            fill={color}
             fontSize={9}
             fontStyle="bold"
             align="center"
@@ -1393,10 +1700,14 @@ function RoomNameInput({
   onSubmit,
   onCancel,
   defaultName,
+  title = 'Nombrar recinto',
+  subtitle = 'El polígono se cerrará y calculará su superficie.',
 }: {
   onSubmit: (name: string) => void;
   onCancel: () => void;
   defaultName: string;
+  title?: string;
+  subtitle?: string;
 }) {
   const [name, setName] = useState(defaultName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1417,8 +1728,8 @@ function RoomNameInput({
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="bg-zinc-900 border border-zinc-600 rounded-xl shadow-2xl p-4 w-72">
-        <h3 className="text-sm font-bold text-white mb-1">Nombrar recinto</h3>
-        <p className="text-[10px] text-zinc-500 mb-3">El polígono se cerrará y calculará su superficie.</p>
+        <h3 className="text-sm font-bold text-white mb-1">{title}</h3>
+        <p className="text-[10px] text-zinc-500 mb-3">{subtitle}</p>
         <input
           ref={inputRef}
           type="text"

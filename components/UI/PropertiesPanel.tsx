@@ -2,6 +2,7 @@
 // Panel derecho — Propiedades (single + multi-select)
 // ==========================================
 
+import { useState, useEffect, useRef } from 'react';
 import { FiLock, FiUnlock, FiCopy, FiTrash2, FiRotateCw, FiInfo } from 'react-icons/fi';
 import useStore from '@/stores/useStore';
 import { CATEGORY_COLORS, CATEGORY_LABELS } from '@/types';
@@ -309,13 +310,33 @@ function ActionBtn({
 function Field({ label, value, onChange, readOnly }: {
   label: string; value: number; onChange?: (v: number) => void; readOnly?: boolean;
 }) {
+  const [localVal, setLocalVal] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  const prevValue = useRef(value);
+
+  useEffect(() => {
+    if (!focused && value !== prevValue.current) {
+      setLocalVal(String(value));
+    }
+    prevValue.current = value;
+  }, [value, focused]);
+
+  const commit = () => {
+    const parsed = parseFloat(localVal);
+    if (!isNaN(parsed)) onChange?.(parsed);
+    else setLocalVal(String(value));
+  };
+
   return (
     <div>
       <label className="text-[10px] text-zinc-500 block mb-0.5">{label}</label>
       <input
         type="number"
-        value={value}
-        onChange={(e) => onChange?.(parseFloat(e.target.value) || 0)}
+        value={focused ? localVal : String(value)}
+        onChange={(e) => setLocalVal(e.target.value)}
+        onFocus={() => { setFocused(true); setLocalVal(String(value)); }}
+        onBlur={() => { setFocused(false); commit(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } }}
         readOnly={readOnly}
         step="0.01"
         className={`w-full bg-zinc-800/60 text-zinc-200 text-xs px-2 py-1 rounded-md border border-zinc-700/50 outline-none tabular-nums ${

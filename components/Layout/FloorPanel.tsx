@@ -97,7 +97,7 @@ export default function FloorPanel() {
         </button>
         <button
           className="p-1 text-cyan-400 hover:bg-cyan-500/15 rounded transition-all disabled:opacity-30"
-          onClick={startTracing}
+          onClick={() => startTracing()}
           title="Trazar nuevo recinto"
           disabled={isTracing}
         >

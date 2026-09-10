@@ -58,6 +58,11 @@ export default function Toolbar() {
   const tracingPoints = useStore((s) => s.tracingPoints);
   const floorRooms = useStore((s) => s.floorRooms);
   const getTotalFloorArea = useStore((s) => s.getTotalFloorArea);
+  const tracingMode = useStore((s) => s.tracingMode);
+  const showOverlaps = useStore((s) => s.showOverlaps);
+  const toggleShowOverlaps = useStore((s) => s.toggleShowOverlaps);
+  const showTrafficFlow = useStore((s) => s.showTrafficFlow);
+  const toggleTrafficFlow = useStore((s) => s.toggleTrafficFlow);
 
   // Image calibration
   const imgCalibrations = useStore((s) => s.imgCalibrations);
@@ -223,6 +228,26 @@ export default function Toolbar() {
 
       <Divider />
 
+      {/* ── Análisis: Solapamientos + Flujo ── */}
+      <ToolGroup label="Análisis">
+        <ToolBtn
+          icon={showOverlaps ? <FiEye /> : <FiEyeOff />}
+          label="Solapamientos"
+          active={showOverlaps}
+          onClick={toggleShowOverlaps}
+          color="emerald"
+        />
+        <ToolBtn
+          icon={showTrafficFlow ? <FiEye /> : <FiEyeOff />}
+          label="Flujo"
+          active={showTrafficFlow}
+          onClick={toggleTrafficFlow}
+          color="blue"
+        />
+      </ToolGroup>
+
+      <Divider />
+
       {/* ── Calibración de imagen ── */}
       <ToolGroup label="Calibrar">
         <ToolBtn
@@ -288,22 +313,65 @@ export default function Toolbar() {
         </>
       )}
 
+      {/* ── Modo de trazo (before starting) ── */}
+      {activeTool === 'trace' && !isTracing && (
+        <>
+          <Divider />
+          <div className="flex items-center gap-1 px-1.5 py-0.5 bg-blue-500/10 rounded-md border border-blue-500/20">
+            <span className="text-[10px] text-blue-400 font-medium mr-1">Modo:</span>
+            <button
+              className={`px-2 py-0.5 text-[10px] rounded transition-all ${
+                tracingMode === 'room'
+                  ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              onClick={() => startTracing('room')}
+            >
+              Superficie
+            </button>
+            <button
+              className={`px-2 py-0.5 text-[10px] rounded transition-all ${
+                tracingMode === 'traffic'
+                  ? 'bg-amber-500/20 text-amber-300 font-bold'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              onClick={() => startTracing('traffic')}
+            >
+              Línea de tráfico
+            </button>
+          </div>
+        </>
+      )}
+
       {/* ── Tracing active indicator ── */}
       {isTracing && (
         <>
           <Divider />
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-cyan-500/15 rounded-md border border-cyan-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-[10px] text-cyan-300 font-medium">
-              Trazando · {tracingPoints.length} pts
+          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md border ${
+            tracingMode === 'traffic'
+              ? 'bg-amber-500/15 border-amber-500/30'
+              : 'bg-cyan-500/15 border-cyan-500/30'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+              tracingMode === 'traffic' ? 'bg-amber-400' : 'bg-cyan-400'
+            }`} />
+            <span className={`text-[10px] font-medium ${
+              tracingMode === 'traffic' ? 'text-amber-300' : 'text-cyan-300'
+            }`}>
+              {tracingMode === 'traffic' ? 'Línea de tráfico' : 'Trazando'} · {tracingPoints.length} pts
             </span>
-            {tracingPoints.length >= 3 && (
+            {((tracingMode === 'room' && tracingPoints.length >= 3) ||
+              (tracingMode === 'traffic' && tracingPoints.length >= 2)) && (
               <button
-                className="px-2 py-0.5 text-[10px] font-bold text-zinc-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-all"
+                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
+                  tracingMode === 'traffic'
+                    ? 'text-zinc-900 bg-amber-400 hover:bg-amber-300'
+                    : 'text-zinc-900 bg-cyan-400 hover:bg-cyan-300'
+                }`}
                 onClick={requestFinish}
-                title="Cerrar polígono y nombrar (Enter)"
+                title={tracingMode === 'traffic' ? 'Finalizar línea (Enter)' : 'Cerrar polígono y nombrar (Enter)'}
               >
-                ✓ Cerrar polígono
+                {tracingMode === 'traffic' ? '✓ Finalizar línea' : '✓ Cerrar polígono'}
               </button>
             )}
             <button
