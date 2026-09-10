@@ -185,6 +185,8 @@ interface AppState {
   bulkToggleLock: () => void;
   bulkMove: (dx: number, dy: number) => void;
   bulkUpdateProp: (props: Partial<MachineInstance>) => void;
+  bulkAlign: (axis: 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom') => void;
+  bulkDistribute: (axis: 'horizontal' | 'vertical') => void;
 
   // === Canvas ===
   canvasScale: number;
@@ -319,12 +321,20 @@ interface AppState {
   simClients: SimClient[];
   simMetrics: SimulationMetrics | null;
   showHeatmap: boolean;
+  simShowTrajectories: boolean;
+  simShowLabels: boolean;
+  simShowQueues: boolean;
+  simSelectedClientId: string | null;
   setSimRunning: (r: boolean) => void;
   setSimSpeed: (s: number) => void;
   setSimTime: (t: number) => void;
   setSimClients: (c: SimClient[]) => void;
   setSimMetrics: (m: SimulationMetrics | null) => void;
   toggleHeatmap: () => void;
+  toggleSimTrajectories: () => void;
+  toggleSimLabels: () => void;
+  toggleSimQueues: () => void;
+  setSimSelectedClientId: (id: string | null) => void;
 
   // === Background image (per-planta) ===
   bgImages: { baja: string | null; alta: string | null };
@@ -463,6 +473,108 @@ const useStore = create<AppState>((set, get) => ({
       machines: s.machines.map((m) =>
         selectedMachineIds.includes(m.id) ? { ...m, ...props } : m
       ),
+    }));
+  },
+
+  // Alinear máquinas seleccionadas
+  bulkAlign: (axis) => {
+    const { selectedMachineIds, machines } = get();
+    const selected = machines.filter((m) => selectedMachineIds.includes(m.id) && m.placed);
+    if (selected.length < 2) return;
+    get().pushHistory();
+
+    let targetVal = 0;
+    switch (axis) {
+      case 'left':
+        targetVal = Math.min(...selected.map((m) => m.x - m2px(m.largo) / 2));
+        set((s) => ({
+          machines: s.machines.map((m) =>
+            selectedMachineIds.includes(m.id) && m.placed && !m.locked
+              ? { ...m, x: targetVal + m2px(m.largo) / 2 }
+              : m
+          ),
+        }));
+        break;
+      case 'right':
+        targetVal = Math.max(...selected.map((m) => m.x + m2px(m.largo) / 2));
+        set((s) => ({
+          machines: s.machines.map((m) =>
+            selectedMachineIds.includes(m.id) && m.placed && !m.locked
+              ? { ...m, x: targetVal - m2px(m.largo) / 2 }
+              : m
+          ),
+        }));
+        break;
+      case 'centerX':
+        targetVal = selected.reduce((sum, m) => sum + m.x, 0) / selected.length;
+        set((s) => ({
+          machines: s.machines.map((m) =>
+            selectedMachineIds.includes(m.id) && m.placed && !m.locked
+              ? { ...m, x: targetVal }
+              : m
+          ),
+        }));
+        break;
+      case 'top':
+        targetVal = Math.min(...selected.map((m) => m.y - m2px(m.ancho) / 2));
+        set((s) => ({
+          machines: s.machines.map((m) =>
+            selectedMachineIds.includes(m.id) && m.placed && !m.locked
+              ? { ...m, y: targetVal + m2px(m.ancho) / 2 }
+              : m
+          ),
+        }));
+        break;
+      case 'bottom':
+        targetVal = Math.max(...selected.map((m) => m.y + m2px(m.ancho) / 2));
+        set((s) => ({
+          machines: s.machines.map((m) =>
+            selectedMachineIds.includes(m.id) && m.placed && !m.locked
+              ? { ...m, y: targetVal - m2px(m.ancho) / 2 }
+              : m
+          ),
+        }));
+        break;
+      case 'centerY':
+        targetVal = selected.reduce((sum, m) => sum + m.y, 0) / selected.length;
+        set((s) => ({
+          machines: s.machines.map((m) =>
+            selectedMachineIds.includes(m.id) && m.placed && !m.locked
+              ? { ...m, y: targetVal }
+              : m
+          ),
+        }));
+        break;
+    }
+  },
+
+  // Distribuir máquinas seleccionadas equidistantemente
+  bulkDistribute: (axis) => {
+    const { selectedMachineIds, machines } = get();
+    const selected = machines
+      .filter((m) => selectedMachineIds.includes(m.id) && m.placed)
+      .sort((a, b) => (axis === 'horizontal' ? a.x - b.x : a.y - b.y));
+    if (selected.length < 3) return;
+    get().pushHistory();
+
+    const first = selected[0];
+    const last = selected[selected.length - 1];
+    const totalSpan = axis === 'horizontal' ? last.x - first.x : last.y - first.y;
+    const step = totalSpan / (selected.length - 1);
+
+    const updates = new Map<string, number>();
+    selected.forEach((m, i) => {
+      const newVal = (axis === 'horizontal' ? first.x : first.y) + step * i;
+      updates.set(m.id, newVal);
+    });
+
+    set((s) => ({
+      machines: s.machines.map((m) => {
+        if (!updates.has(m.id) || m.locked) return m;
+        return axis === 'horizontal'
+          ? { ...m, x: updates.get(m.id)! }
+          : { ...m, y: updates.get(m.id)! };
+      }),
     }));
   },
 
@@ -1092,12 +1204,20 @@ const useStore = create<AppState>((set, get) => ({
   simClients: [],
   simMetrics: null,
   showHeatmap: false,
+  simShowTrajectories: true,
+  simShowLabels: false,
+  simShowQueues: true,
+  simSelectedClientId: null,
   setSimRunning: (r) => set({ simRunning: r }),
   setSimSpeed: (s) => set({ simSpeed: s }),
   setSimTime: (t) => set({ simTime: t }),
   setSimClients: (c) => set({ simClients: c }),
   setSimMetrics: (m) => set({ simMetrics: m }),
   toggleHeatmap: () => set((s) => ({ showHeatmap: !s.showHeatmap })),
+  toggleSimTrajectories: () => set((s) => ({ simShowTrajectories: !s.simShowTrajectories })),
+  toggleSimLabels: () => set((s) => ({ simShowLabels: !s.simShowLabels })),
+  toggleSimQueues: () => set((s) => ({ simShowQueues: !s.simShowQueues })),
+  setSimSelectedClientId: (id) => set({ simSelectedClientId: id }),
 
   // === Background (per-planta, user-imported) ===
   bgImages: saved?.bgImages ?? {

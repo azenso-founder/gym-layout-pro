@@ -19,6 +19,11 @@ import MetricsModule from '@/components/Simulation/MetricsModule';
 import ExportModule from '@/components/Export/ExportModule';
 import CraftModule from '@/components/Craft/CraftModule';
 import LayoutProLogo from '@/components/UI/LayoutProLogo';
+import VisualSettingsModal from '@/components/UI/VisualSettingsModal';
+import StatusBar from '@/components/UI/StatusBar';
+import SkipLink from '@/components/UI/SkipLink';
+import OnboardingTour from '@/components/UI/OnboardingTour';
+import { AriaLiveProvider } from '@/components/UI/AriaLive';
 import type { AppTab } from '@/types';
 
 const MODULE_TABS: { id: AppTab; label: string; icon: string }[] = [
@@ -44,6 +49,12 @@ export default function ProjectEditor({ projectId }: Props) {
   const [projectName, setProjectName] = useState('Cargando...');
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('idle');
   const [loadingProject, setLoadingProject] = useState(true);
+  const [showVisualSettings, setShowVisualSettings] = useState(false);
+  const [showTour, setShowTour] = useState(false);
+
+  // Fase 13: responsive — paneles colapsables
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
 
   // Auto-save timer
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -93,9 +104,9 @@ export default function ProjectEditor({ projectId }: Props) {
       const machinesAlta = configAlta?.layout_data || [];
       const allMachines = [...machinesBaja, ...machinesAlta];
 
-      // Recuperar floorRooms de zones
-      const roomsBaja = floorBaja?.zones || [];
-      const roomsAlta = floorAlta?.zones || [];
+      // Recuperar floorRooms de zones — asegurar que cada room tenga planta correcta
+      const roomsBaja = (floorBaja?.zones || []).map((r: any) => ({ ...r, planta: 'baja' as const }));
+      const roomsAlta = (floorAlta?.zones || []).map((r: any) => ({ ...r, planta: 'alta' as const }));
       const allRooms = [...roomsBaja, ...roomsAlta];
 
       // Recuperar datos globales
@@ -178,30 +189,34 @@ export default function ProjectEditor({ projectId }: Props) {
 
       // Guardar Planta Baja
       if (configIdsRef.current.baja) {
-        await supabase
+        const { error } = await supabase
           .from('floor_configurations')
           .update({ layout_data: machinesBaja })
           .eq('id', configIdsRef.current.baja);
+        if (error) { console.error('Error guardando máquinas planta baja:', error); throw error; }
       }
       if (floorIdsRef.current.baja) {
-        await supabase
+        const { error } = await supabase
           .from('project_floors')
           .update({ zones: roomsBaja })
           .eq('id', floorIdsRef.current.baja);
+        if (error) { console.error('Error guardando zonas planta baja:', error); throw error; }
       }
 
       // Guardar Planta Alta
       if (configIdsRef.current.alta) {
-        await supabase
+        const { error } = await supabase
           .from('floor_configurations')
           .update({ layout_data: machinesAlta })
           .eq('id', configIdsRef.current.alta);
+        if (error) { console.error('Error guardando máquinas planta alta:', error); throw error; }
       }
       if (floorIdsRef.current.alta) {
-        await supabase
+        const { error } = await supabase
           .from('project_floors')
           .update({ zones: roomsAlta })
           .eq('id', floorIdsRef.current.alta);
+        if (error) { console.error('Error guardando zonas planta alta:', error); throw error; }
       }
 
       lastSaveRef.current = dataFingerprint;
@@ -212,16 +227,27 @@ export default function ProjectEditor({ projectId }: Props) {
     }
   }, [projectId]);
 
-  // Suscribirse a cambios del store para auto-save
+  // Suscribirse a cambios del store para auto-save (5s debounce en vez de 30s)
   useEffect(() => {
     const unsub = useStore.subscribe(() => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(saveProject, 30_000); // 30s debounce
+      saveTimerRef.current = setTimeout(saveProject, 5_000); // 5s debounce
     });
+
+    // Guardar al cerrar/navegar — prevenir pérdida de datos
+    const handleBeforeUnload = () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        // Intentar guardar sincrónicamente no es posible, pero al menos
+        // guardamos en localStorage como respaldo (el store ya lo hace)
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
       unsub();
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [saveProject]);
 
@@ -249,7 +275,11 @@ export default function ProjectEditor({ projectId }: Props) {
   }
 
   return (
+    <AriaLiveProvider>
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
+      {/* Skip link para accesibilidad (Fase 8) */}
+      <SkipLink targetId="main-canvas" />
+
       {/* ===== HEADER: Logo + Module Tabs + Save Status + Planta Selector ===== */}
       <div className="h-11 bg-zinc-900 border-b border-zinc-800 flex items-center px-4 shrink-0">
         {/* Back + Logo */}
@@ -257,6 +287,7 @@ export default function ProjectEditor({ projectId }: Props) {
           onClick={() => router.push('/dashboard')}
           className="flex items-center gap-1 text-zinc-500 hover:text-zinc-300 transition-colors mr-3"
           title="Volver al dashboard"
+          aria-label="Volver al dashboard"
         >
           <span className="text-sm">←</span>
         </button>
@@ -283,10 +314,12 @@ export default function ProjectEditor({ projectId }: Props) {
         </div>
 
         {/* Module Tabs */}
-        <nav className="flex items-center gap-0.5">
+        <nav className="flex items-center gap-0.5" aria-label="Módulos del editor">
           {MODULE_TABS.map((tab) => (
             <button
               key={tab.id}
+              aria-label={`Módulo ${tab.label}`}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                 activeTab === tab.id
                   ? 'bg-orange-600/15 text-orange-400 tab-active-glow'
@@ -302,8 +335,28 @@ export default function ProjectEditor({ projectId }: Props) {
 
         <div className="flex-1" />
 
+        {/* Botón repetir tour */}
+        <button
+          onClick={() => setShowTour(true)}
+          className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-all mr-1"
+          title="Repetir tour de bienvenida"
+          aria-label="Repetir tour de bienvenida"
+        >
+          ❓
+        </button>
+
+        {/* Botón configuración visual */}
+        <button
+          onClick={() => setShowVisualSettings(true)}
+          className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-all mr-2"
+          title="Configuración visual"
+          aria-label="Abrir configuración visual"
+        >
+          ⚙️
+        </button>
+
         {/* Planta selector */}
-        <div className="flex items-center gap-1 bg-zinc-800/60 rounded-lg p-0.5">
+        <div data-tour="planta-selector" className="flex items-center gap-1 bg-zinc-800/60 rounded-lg p-0.5">
           <button
             className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
               activePlanta === 'baja'
@@ -332,35 +385,78 @@ export default function ProjectEditor({ projectId }: Props) {
       </div>
 
       {/* ===== TOOLBAR (only in layout + simulation modes) ===== */}
-      {(activeTab === 'layout' || activeTab === 'simulacion') && <Toolbar />}
+      {(activeTab === 'layout' || activeTab === 'simulacion') && (
+        <div data-tour="toolbar"><Toolbar /></div>
+      )}
 
       {/* ===== MAIN CONTENT ===== */}
       <div className="flex flex-1 min-h-0">
-        {/* Sidebar (only in layout mode) */}
-        {activeTab === 'layout' && <Sidebar />}
+        {/* Sidebar (only in layout mode) — colapsable (Fase 13) */}
+        {activeTab === 'layout' && (
+          <div data-tour="sidebar" data-sidebar-collapsed={sidebarCollapsed} className="relative panel-transition">
+            <Sidebar />
+            <button
+              className="collapse-btn"
+              style={{ top: '50%', right: -12, transform: 'translateY(-50%)' }}
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              aria-label={sidebarCollapsed ? 'Expandir sidebar' : 'Colapsar sidebar'}
+              title={sidebarCollapsed ? 'Expandir' : 'Colapsar'}
+            >
+              {sidebarCollapsed ? '▸' : '◂'}
+            </button>
+          </div>
+        )}
 
         {/* Central area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {activeTab === 'layout' && <LayoutCanvas />}
-          {activeTab === 'slp' && <SLPModule />}
-          {activeTab === 'simulacion' && (
-            <div className="flex flex-1 min-h-0">
-              <div className="flex-1 min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden">
+          {(activeTab === 'layout' || activeTab === 'simulacion') && (
+            <div className="flex flex-1 min-h-0 h-full w-full">
+              <div id="main-canvas" data-tour="canvas" className="flex-1 min-w-0 flex flex-col h-full relative" role="application" aria-label="Canvas del plano de layout">
                 <LayoutCanvas />
               </div>
-              <div className="w-[420px] shrink-0 border-l border-zinc-800 overflow-y-auto bg-zinc-950">
-                <SimulationModule />
-              </div>
+              {activeTab === 'simulacion' && (
+                <div className="w-[420px] shrink-0 border-l border-zinc-800 overflow-y-auto bg-zinc-950 h-full">
+                  <SimulationModule />
+                </div>
+              )}
             </div>
           )}
+          {activeTab === 'slp' && <SLPModule />}
           {activeTab === 'metricas' && <MetricsModule />}
           {activeTab === 'export' && <ExportModule />}
           {activeTab === 'craft' && <CraftModule />}
         </div>
 
-        {/* Properties panel (only in layout mode) */}
-        {activeTab === 'layout' && <PropertiesPanel />}
+        {/* Properties panel (only in layout mode) — colapsable (Fase 13) */}
+        {activeTab === 'layout' && (
+          <div data-tour="properties" data-panel-collapsed={panelCollapsed} className="relative panel-transition">
+            <PropertiesPanel />
+            <button
+              className="collapse-btn"
+              style={{ top: '50%', left: -12, transform: 'translateY(-50%)' }}
+              onClick={() => setPanelCollapsed(!panelCollapsed)}
+              aria-label={panelCollapsed ? 'Expandir panel' : 'Colapsar panel'}
+              title={panelCollapsed ? 'Expandir' : 'Colapsar'}
+            >
+              {panelCollapsed ? '◂' : '▸'}
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Barra de estado inferior (Fase 12) — solo en layout y simulación */}
+      {(activeTab === 'layout' || activeTab === 'simulacion') && (
+        <div data-tour="status-bar">
+          <StatusBar saveStatus={saveStatus} />
+        </div>
+      )}
+
+      {/* Modal de configuración visual global */}
+      <VisualSettingsModal open={showVisualSettings} onClose={() => setShowVisualSettings(false)} />
+
+      {/* Tour de onboarding (Fase 9) — se muestra en primer uso */}
+      <OnboardingTour forceShow={showTour} onComplete={() => setShowTour(false)} />
     </div>
+    </AriaLiveProvider>
   );
 }

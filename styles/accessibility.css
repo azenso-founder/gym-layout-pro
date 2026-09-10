@@ -1,0 +1,79 @@
+/* ==========================================
+   Estilos de accesibilidad globales — Fase 8
+   Focus visible, reduced motion, alto contraste
+   ========================================== */
+
+/* 8.1 — Focus visible: anillo azul de 2px en todos los elementos interactivos */
+:focus-visible {
+  outline: 2px solid #3B82F6;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Quitar outline por defecto en focus (solo :focus, no :focus-visible) */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 8.5 — Respetar prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin,
+  .animate-pulse,
+  .animate-bounce {
+    animation: none !important;
+  }
+}
+
+/* 8.5 — Respetar prefers-contrast: high */
+@media (prefers-contrast: more) {
+  :root {
+    --text-primary: #ffffff;
+    --text-secondary: #e0e0e0;
+    --text-muted: #b0b0b0;
+    --border-default: #666666;
+    --border-subtle: #555555;
+    --bg-surface: #000000;
+    --bg-panel: #111111;
+  }
+
+  /* Aumentar grosor de bordes */
+  button,
+  input,
+  select,
+  textarea {
+    border-width: 2px !important;
+  }
+
+  /* Asegurar contraste en badges y etiquetas */
+  [class*="text-zinc-500"],
+  [class*="text-zinc-600"] {
+    color: #b0b0b0 !important;
+  }
+}
+
+/* Screen reader only — mejorado */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Focus trap helper — elementos dentro de modales */
+.focus-trap-active [tabindex="-1"]:focus {
+  outline: none;
+}

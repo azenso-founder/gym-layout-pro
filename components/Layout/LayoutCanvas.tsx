@@ -6,13 +6,17 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Stage, Layer, Rect, Line, Circle, Group, Text, Image as KonvaImage, RegularPolygon } from 'react-konva';
 import useStore, { m2px, px2m, PIXELS_PER_METER } from '@/stores/useStore';
-import { CATEGORY_COLORS, CLIENT_STATE_COLORS } from '@/types';
-import type { FloorRoom, ImageLayer, TrafficLine } from '@/types';
+import { CATEGORY_COLORS, CLIENT_STATE_COLORS, ROUTINE_CONFIG } from '@/types';
+import type { FloorRoom, ImageLayer, TrafficLine, SimClient } from '@/types';
 import { calcularHaloRadius, getOperativeSides } from '@/engine/guerchet';
+import { calcSnapGuides, findCollisions, isOutOfBounds } from '@/engine/snapGuides';
+import type { SnapGuide } from '@/engine/snapGuides';
 import { PLANTA_INFO } from '@/data/machines';
 import useImage from '@/utils/useImage';
 import FloorPanel from './FloorPanel';
 import PropertiesPanel from './PropertiesPanel';
+import ContextMenu from '@/components/UI/ContextMenu';
+import type { MenuItem } from '@/components/UI/ContextMenu';
 
 export default function LayoutCanvas() {
   const stageRef = useRef<any>(null);
@@ -42,6 +46,29 @@ export default function LayoutCanvas() {
   const activeTab = useStore((s) => s.activeTab);
   const simClients = useStore((s) => s.simClients);
   const showHeatmap = useStore((s) => s.showHeatmap);
+  const simShowTrajectories = useStore((s) => s.simShowTrajectories);
+  const simShowLabels = useStore((s) => s.simShowLabels);
+  const simShowQueues = useStore((s) => s.simShowQueues);
+  const simSelectedClientId = useStore((s) => s.simSelectedClientId);
+  const setSimSelectedClientId = useStore((s) => s.setSimSelectedClientId);
+
+  const [hoveredClient, setHoveredClient] = useState<SimClient | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Fase 5: feedback visual al arrastrar
+  const [activeGuides, setActiveGuides] = useState<SnapGuide[]>([]);
+  const [dragCollisions, setDragCollisions] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOutOfBounds, setDragOutOfBounds] = useState(false);
+  const [hoveredMachineId, setHoveredMachineId] = useState<string | null>(null);
+
+  // Fase 10: menú contextual
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; machineId: string | null } | null>(null);
+
+  // Fase 10: lasso multi-selección
+  const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
+  const [lassoEnd, setLassoEnd] = useState<{ x: number; y: number } | null>(null);
+  const [isLassoing, setIsLassoing] = useState(false);
 
   // Floor plan tracing
   const floorRooms = useStore((s) => s.floorRooms);
@@ -78,6 +105,15 @@ export default function LayoutCanvas() {
 
   // Overlap & flow
   const showOverlaps = useStore((s) => s.showOverlaps);
+  const bulkAlign = useStore((s) => s.bulkAlign);
+  const bulkDistribute = useStore((s) => s.bulkDistribute);
+  const duplicateMachine = useStore((s) => s.duplicateMachine);
+  const removeMachine = useStore((s) => s.removeMachine);
+  const toggleLockMachine = useStore((s) => s.toggleLockMachine);
+  const rotateMachine = useStore((s) => s.rotateMachine);
+  const bulkRotate = useStore((s) => s.bulkRotate);
+  const bulkRemove = useStore((s) => s.bulkRemove);
+  const bulkToggleLock = useStore((s) => s.bulkToggleLock);
   const showTrafficFlow = useStore((s) => s.showTrafficFlow);
   const trafficFlowSpeed = useStore((s) => s.trafficFlowSpeed);
 
@@ -234,6 +270,17 @@ export default function LayoutCanvas() {
         return; // Don't process other shortcuts during tracing
       }
 
+      // --- Tool switching & toggle shortcuts ---
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        if (e.key === 'v' || e.key === 'V') { store.setActiveTool('select'); return; }
+        if (e.key === 'h' || e.key === 'H') { store.setActiveTool('pan'); return; }
+        if (e.key === 'm' || e.key === 'M') { store.setActiveTool('measure'); return; }
+        if (e.key === 'z' || e.key === 'Z') { store.setActiveTool('zone'); return; }
+        if (e.key === 't' || e.key === 'T') { store.startTracing(); return; }
+        if (e.key === 'g' || e.key === 'G') { store.toggleGrid(); return; }
+        if (e.key === 'k' || e.key === 'K') { store.toggleGuerchetHalo(); return; }
+      }
+
       const { selectedMachineIds: selIds } = store;
       const hasSelection = selIds.length > 0;
 
@@ -264,10 +311,10 @@ export default function LayoutCanvas() {
       // --- Manipulation shortcuts (work on multi-select) ---
       if (!hasSelection) return;
 
-      // R: Rotate selected 90°
+      // R / Shift+R: Rotate selected 90° CW / CCW
       if (e.key === 'r' || e.key === 'R') {
         if (!e.ctrlKey && !e.metaKey) {
-          store.bulkRotate(90);
+          store.bulkRotate(e.shiftKey ? -90 : 90);
           return;
         }
       }
@@ -278,18 +325,20 @@ export default function LayoutCanvas() {
         return;
       }
 
-      // L: Toggle lock on selected
-      if (e.key === 'l' || e.key === 'L') {
+      // Ctrl+L: Toggle lock on selected
+      if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
         store.bulkToggleLock();
         return;
       }
 
-      // D: Duplicate primary selected
-      if (e.key === 'd' || e.key === 'D') {
-        if (!e.ctrlKey && !e.metaKey && store.selectedMachineId) {
+      // Ctrl+D: Duplicate primary selected
+      if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (store.selectedMachineId) {
           store.duplicateMachine(store.selectedMachineId);
-          return;
         }
+        return;
       }
 
       // Arrow keys: Nudge selected machines
@@ -320,40 +369,54 @@ export default function LayoutCanvas() {
         store.redo();
       }
 
-      // G: Toggle grid
-      if (e.key === 'g' && !e.ctrlKey && !e.metaKey) {
-        store.toggleGrid();
-      }
-
-      // H: Toggle Guerchet halo
-      if (e.key === 'h' && !e.ctrlKey && !e.metaKey) {
-        store.toggleGuerchetHalo();
-      }
+      // G: Toggle grid (now handled by tool switching above)
+      // H: Pan tool (now handled by tool switching above)
+      // K: Toggle halos (now handled by tool switching above)
     };
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // Container size — wait for layout before mounting Konva Stage
+  // Container size — robust ResizeObserver
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    const resize = () => {
+    const updateSize = () => {
       if (containerRef.current) {
         const w = containerRef.current.clientWidth;
         const h = containerRef.current.clientHeight;
         if (w > 0 && h > 0) {
           setStageSize({ width: w, height: h });
-          if (!mounted) setMounted(true);
+          setMounted(true);
         }
       }
     };
-    // Double-RAF to guarantee DOM layout is complete
-    requestAnimationFrame(() => requestAnimationFrame(resize));
-    window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
-  }, [mounted]);
+
+    updateSize();
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      ro = new ResizeObserver(() => {
+        updateSize();
+      });
+      ro.observe(containerRef.current);
+    }
+
+    const raf1 = requestAnimationFrame(() => {
+      updateSize();
+      const raf2 = requestAnimationFrame(updateSize);
+      return () => cancelAnimationFrame(raf2);
+    });
+
+    window.addEventListener('resize', updateSize);
+
+    return () => {
+      if (ro) ro.disconnect();
+      cancelAnimationFrame(raf1);
+      window.removeEventListener('resize', updateSize);
+    };
+  }, []);
 
   // Handle machine click (single, ctrl, shift)
   const handleMachineClick = (machineId: string, e: any) => {
@@ -380,12 +443,55 @@ export default function LayoutCanvas() {
     }
   };
 
+  // Cálculo de celdas de calor para el modo simulación
+  const heatmapCells = useMemo(() => {
+    if (activeTab !== 'simulacion' || !showHeatmap || simClients.length === 0) return [];
+    const gridSize = 45;
+    const grid = new Map<string, number>();
+
+    for (const client of simClients) {
+      const gx = Math.round(client.x / gridSize) * gridSize;
+      const gy = Math.round(client.y / gridSize) * gridSize;
+      const key = `${gx},${gy}`;
+      grid.set(key, (grid.get(key) || 0) + 1);
+    }
+
+    // Agregar también máquinas ocupadas con cola
+    for (const m of machines.filter((x) => x.planta === activePlanta && x.placed)) {
+      const clientsAtMachine = simClients.filter((c) => c.targetMachineId === m.id);
+      if (clientsAtMachine.length > 0) {
+        const gx = Math.round(m.x / gridSize) * gridSize;
+        const gy = Math.round(m.y / gridSize) * gridSize;
+        const key = `${gx},${gy}`;
+        grid.set(key, (grid.get(key) || 0) + clientsAtMachine.length);
+      }
+    }
+
+    const maxCount = Math.max(1, ...grid.values());
+    return Array.from(grid.entries()).map(([key, count]) => {
+      const [x, y] = key.split(',').map(Number);
+      return {
+        x,
+        y,
+        intensity: count / maxCount,
+        count,
+      };
+    });
+  }, [activeTab, showHeatmap, simClients, machines, activePlanta]);
+
   return (
-    <div className="flex-1 flex bg-zinc-950 overflow-hidden">
+    <div className="flex-1 flex flex-col bg-zinc-950 overflow-hidden w-full h-full relative min-h-0 min-w-0">
       <div
         ref={containerRef}
         tabIndex={-1}
-        className={`flex-1 relative outline-none ${activeTool === 'trace' ? 'cursor-crosshair' : ''}`}
+        onContextMenu={(e) => e.preventDefault()}
+        className={`flex-1 w-full h-full relative outline-none overflow-hidden ${
+          activeTool === 'trace' || activeTool === 'measure' || activeTool === 'zone'
+            ? 'cursor-crosshair'
+            : activeTool === 'pan'
+            ? isDragging ? 'cursor-grabbing' : 'cursor-grab'
+            : ''
+        }`}
       >
       {!mounted ? null : (
       <Stage
@@ -402,6 +508,68 @@ export default function LayoutCanvas() {
           if (e.target === stageRef.current) {
             setCanvasOffset({ x: e.target.x(), y: e.target.y() });
           }
+        }}
+        onContextMenu={(e) => {
+          if (e.target === stageRef.current) {
+            e.evt.preventDefault();
+            setContextMenu({
+              x: e.evt.clientX,
+              y: e.evt.clientY,
+              machineId: null,
+            });
+          }
+        }}
+        onMouseDown={(e) => {
+          // Lasso: iniciar selección por rectángulo con click izquierdo en canvas vacío
+          if (e.target === stageRef.current && activeTool === 'select' && !isTracing && e.evt.button === 0) {
+            const stage = stageRef.current;
+            const pointer = stage?.getPointerPosition();
+            if (pointer) {
+              const cx = (pointer.x - canvasOffset.x) / canvasScale;
+              const cy = (pointer.y - canvasOffset.y) / canvasScale;
+              setLassoStart({ x: cx, y: cy });
+              setLassoEnd({ x: cx, y: cy });
+              setIsLassoing(true);
+            }
+          }
+        }}
+        onMouseMove={(e) => {
+          // Lasso: actualizar rectángulo
+          if (isLassoing && lassoStart) {
+            const stage = stageRef.current;
+            const pointer = stage?.getPointerPosition();
+            if (pointer) {
+              const cx = (pointer.x - canvasOffset.x) / canvasScale;
+              const cy = (pointer.y - canvasOffset.y) / canvasScale;
+              setLassoEnd({ x: cx, y: cy });
+            }
+          }
+        }}
+        onMouseUp={() => {
+          // Lasso: finalizar y seleccionar máquinas dentro del rectángulo
+          if (isLassoing && lassoStart && lassoEnd) {
+            const lx1 = Math.min(lassoStart.x, lassoEnd.x);
+            const ly1 = Math.min(lassoStart.y, lassoEnd.y);
+            const lx2 = Math.max(lassoStart.x, lassoEnd.x);
+            const ly2 = Math.max(lassoStart.y, lassoEnd.y);
+
+            // Solo seleccionar si el rectángulo tiene tamaño mínimo
+            if (lx2 - lx1 > 5 && ly2 - ly1 > 5) {
+              const store = useStore.getState();
+              const inRect = plantaMachines.filter((m) => {
+                if (!m.placed) return false;
+                return m.x >= lx1 && m.x <= lx2 && m.y >= ly1 && m.y <= ly2;
+              });
+              if (inRect.length > 0) {
+                // Seleccionar todas las máquinas dentro del rectángulo
+                store.clearSelection();
+                inRect.forEach((m) => store.addToSelection(m.id));
+              }
+            }
+          }
+          setIsLassoing(false);
+          setLassoStart(null);
+          setLassoEnd(null);
         }}
         onClick={(e) => {
           if (e.target === stageRef.current) {
@@ -564,7 +732,25 @@ export default function LayoutCanvas() {
         {/* Heatmap overlay (simulation) */}
         {activeTab === 'simulacion' && showHeatmap && (
           <Layer listening={false}>
-            {/* Placeholder for heatmap cells */}
+            {heatmapCells.map((cell, i) => {
+              const r = 35 + cell.intensity * 25;
+              const color =
+                cell.intensity > 0.65
+                  ? '#EF4444' // Congestión alta (rojo)
+                  : cell.intensity > 0.35
+                  ? '#F97316' // Congestión media (naranja)
+                  : '#38BDF8'; // Circulación leve (azul)
+              return (
+                <Circle
+                  key={`heat-${cell.x}-${cell.y}-${i}`}
+                  x={cell.x}
+                  y={cell.y}
+                  radius={r}
+                  fill={color}
+                  opacity={0.35 + cell.intensity * 0.3}
+                />
+              );
+            })}
           </Layer>
         )}
 
@@ -706,10 +892,67 @@ export default function LayoutCanvas() {
                 rotation={machine.rotation}
                 draggable={!machine.locked && !isTracing}
                 onClick={(e) => handleMachineClick(machine.id, e)}
-                onDragStart={() => {
+                onContextMenu={(e) => {
+                  e.evt.preventDefault();
+                  e.cancelBubble = true;
+                  // Seleccionar si no está seleccionada
+                  if (!selectedMachineIds.includes(machine.id)) {
+                    setSelectedMachine(machine.id);
+                  }
+                  setContextMenu({
+                    x: e.evt.clientX,
+                    y: e.evt.clientY,
+                    machineId: machine.id,
+                  });
+                }}
+                onMouseEnter={(e) => {
+                  setHoveredMachineId(machine.id);
+                  const stage = e.target.getStage();
+                  if (stage && !isTracing && activeTool === 'select') {
+                    stage.container().style.cursor = machine.locked ? 'not-allowed' : 'grab';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  setHoveredMachineId(null);
+                  const stage = e.target.getStage();
+                  if (stage && !isDragging) {
+                    stage.container().style.cursor = 'default';
+                  }
+                }}
+                onDragStart={(e) => {
+                  setIsDragging(true);
+                  const stage = e.target.getStage();
+                  if (stage) stage.container().style.cursor = 'grabbing';
                   useStore.getState().pushHistory();
                 }}
+                onDragMove={(e) => {
+                  // Calcular guías de alineación en tiempo real
+                  const cx = e.target.x();
+                  const cy = e.target.y();
+                  const result = calcSnapGuides(
+                    machine.id, cx, cy, w, h, plantaMachines
+                  );
+                  // Aplicar snap visual (mover la máquina a la posición snapped)
+                  if (result.guides.length > 0) {
+                    e.target.x(result.x);
+                    e.target.y(result.y);
+                  }
+                  setActiveGuides(result.guides);
+                  // Detectar colisiones
+                  const cols = findCollisions(
+                    machine.id, result.x, result.y, w, h, plantaMachines
+                  );
+                  setDragCollisions(cols);
+                  // Detectar fuera de límites
+                  setDragOutOfBounds(isOutOfBounds(result.x, result.y, w, h, canvasW, canvasH));
+                }}
                 onDragEnd={(e) => {
+                  setIsDragging(false);
+                  setActiveGuides([]);
+                  setDragCollisions([]);
+                  setDragOutOfBounds(false);
+                  const stage = e.target.getStage();
+                  if (stage) stage.container().style.cursor = 'default';
                   const newX = snapToGrid(e.target.x());
                   const newY = snapToGrid(e.target.y());
                   moveMachine(machine.id, newX, newY);
@@ -732,20 +975,42 @@ export default function LayoutCanvas() {
                   />
                 )}
 
-                {/* Machine body */}
-                <Rect
-                  x={0}
-                  y={0}
-                  width={w}
-                  height={h}
-                  fill={color + (isSelected ? 'CC' : '80')}
-                  stroke={showOverlaps && overlappingIds.has(machine.id) ? '#EF4444' : isPrimary ? '#fff' : isSelected ? '#f97316' : color}
-                  strokeWidth={isSelected ? 2 : 1}
-                  cornerRadius={3}
-                  shadowBlur={isSelected ? 10 : showOverlaps && overlappingIds.has(machine.id) ? 8 : 0}
-                  shadowColor={showOverlaps && overlappingIds.has(machine.id) ? '#EF4444' : isPrimary ? '#fff' : '#f97316'}
-                  shadowOpacity={0.4}
-                />
+                {/* Machine body — con feedback de hover, colisión y selección */}
+                {(() => {
+                  const isHovered = hoveredMachineId === machine.id;
+                  const isDragColliding = dragCollisions.includes(machine.id);
+                  const isStaticOverlap = showOverlaps && overlappingIds.has(machine.id);
+                  const colliding = isDragColliding || isStaticOverlap;
+
+                  // Color de relleno: rojo semi-transparente si colisiona durante drag
+                  const fillColor = isDragColliding
+                    ? '#EF444480'
+                    : color + (isSelected ? 'CC' : isHovered ? 'AA' : '80');
+
+                  // Color de borde
+                  const strokeColor = colliding
+                    ? '#EF4444'
+                    : isPrimary ? '#fff'
+                    : isSelected ? '#f97316'
+                    : isHovered ? '#ffffffAA'
+                    : color;
+
+                  return (
+                    <Rect
+                      x={0}
+                      y={0}
+                      width={w}
+                      height={h}
+                      fill={fillColor}
+                      stroke={strokeColor}
+                      strokeWidth={isSelected ? 2 : isHovered ? 1.5 : 1}
+                      cornerRadius={3}
+                      shadowBlur={isSelected ? 10 : colliding ? 8 : isHovered ? 6 : 0}
+                      shadowColor={colliding ? '#EF4444' : isPrimary ? '#fff' : isHovered ? '#ffffff' : '#f97316'}
+                      shadowOpacity={colliding ? 0.6 : 0.4}
+                    />
+                  );
+                })()}
 
                 {/* Machine name */}
                 <Text
@@ -843,25 +1108,356 @@ export default function LayoutCanvas() {
           </Layer>
         )}
 
-        {/* Simulation clients */}
-        {activeTab === 'simulacion' && (
+        {/* Lasso de selección (Fase 10 — rectángulo azul punteado) */}
+        {isLassoing && lassoStart && lassoEnd && (
           <Layer listening={false}>
-            {simClients.map((client) => (
-              <Circle
-                key={client.id}
-                x={client.x}
-                y={client.y}
-                radius={4}
-                fill={CLIENT_STATE_COLORS[client.estado]}
-                stroke="#fff"
-                strokeWidth={0.5}
-                opacity={0.9}
+            <Rect
+              x={Math.min(lassoStart.x, lassoEnd.x)}
+              y={Math.min(lassoStart.y, lassoEnd.y)}
+              width={Math.abs(lassoEnd.x - lassoStart.x)}
+              height={Math.abs(lassoEnd.y - lassoStart.y)}
+              fill="#3B82F615"
+              stroke="#3B82F6"
+              strokeWidth={1}
+              dash={[6, 3]}
+            />
+          </Layer>
+        )}
+
+        {/* Snap alignment guides (Fase 5 — líneas verdes tipo Figma) */}
+        {activeGuides.length > 0 && (
+          <Layer listening={false}>
+            {activeGuides.map((guide, i) => (
+              <Line
+                key={`guide-${i}`}
+                points={
+                  guide.type === 'vertical'
+                    ? [guide.pos, guide.from, guide.pos, guide.to]
+                    : [guide.from, guide.pos, guide.to, guide.pos]
+                }
+                stroke="#22C55E"
+                strokeWidth={1}
+                dash={[6, 3]}
+                opacity={0.85}
               />
             ))}
           </Layer>
         )}
+
+        {/* Borde rojo parpadeante si la máquina sale del perímetro */}
+        {dragOutOfBounds && (
+          <Layer listening={false}>
+            <Rect
+              x={0}
+              y={0}
+              width={canvasW}
+              height={canvasH}
+              stroke="#EF4444"
+              strokeWidth={3}
+              dash={[12, 6]}
+              fill="transparent"
+              opacity={0.7}
+            />
+          </Layer>
+        )}
+
+        {/* Simulation clients */}
+        {activeTab === 'simulacion' && (
+          <Layer>
+            {/* 1. Líneas de trayectoria hacia máquina destino o salida */}
+            {simClients
+              .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
+              .map((client) => {
+                const isSelected = client.id === simSelectedClientId;
+                const isHovered = client.id === hoveredClient?.id;
+                const shouldShow = simShowTrajectories || isSelected || isHovered;
+
+                if (!shouldShow) return null;
+
+                if (client.estado === 'caminando' && client.targetMachineId) {
+                  const target = plantaMachines.find((m) => m.id === client.targetMachineId);
+                  if (target && Number.isFinite(target.x) && Number.isFinite(target.y)) {
+                    return (
+                      <Line
+                        key={`traj-${client.id}`}
+                        points={[client.x, client.y, target.x, target.y]}
+                        stroke={CLIENT_STATE_COLORS.caminando}
+                        strokeWidth={isSelected ? 2.5 : 1.5}
+                        dash={[6, 4]}
+                        opacity={isSelected ? 0.9 : 0.6}
+                        listening={false}
+                      />
+                    );
+                  }
+                }
+
+                if (client.estado === 'saliendo') {
+                  const tx = Number.isFinite(client.targetX) ? client.targetX! : 80;
+                  const ty = Number.isFinite(client.targetY) ? client.targetY! : 700;
+                  return (
+                    <Line
+                      key={`traj-exit-${client.id}`}
+                      points={[client.x, client.y, tx, ty]}
+                      stroke={CLIENT_STATE_COLORS.saliendo}
+                      strokeWidth={isSelected ? 2.5 : 1.5}
+                      dash={[6, 4]}
+                      opacity={isSelected ? 0.9 : 0.6}
+                      listening={false}
+                    />
+                  );
+                }
+
+                return null;
+              })}
+
+            {/* Circuito completo de entrenamiento si hay cliente seleccionado */}
+            {(() => {
+              const sel = simClients.find((c) => c.id === simSelectedClientId);
+              if (!sel || sel.machinesPending.length === 0) return null;
+              const circuitLines: React.JSX.Element[] = [];
+              let curX = Number.isFinite(sel.targetX) ? sel.targetX! : sel.x;
+              let curY = Number.isFinite(sel.targetY) ? sel.targetY! : sel.y;
+
+              sel.machinesPending.forEach((mid, idx) => {
+                const m = plantaMachines.find((x) => x.id === mid);
+                if (m && Number.isFinite(m.x) && Number.isFinite(m.y)) {
+                  circuitLines.push(
+                    <Line
+                      key={`circuit-${mid}-${idx}`}
+                      points={[curX, curY, m.x, m.y]}
+                      stroke="#F59E0B"
+                      strokeWidth={2}
+                      dash={[5, 4]}
+                      opacity={0.8}
+                      listening={false}
+                    />
+                  );
+                  curX = m.x;
+                  curY = m.y;
+                }
+              });
+              return <Group>{circuitLines}</Group>;
+            })()}
+
+            {/* 2. Puntos / Agentes interactivos */}
+            {simClients
+              .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
+              .map((client) => {
+              const isSelected = client.id === simSelectedClientId;
+              const isHovered = client.id === hoveredClient?.id;
+              const color = CLIENT_STATE_COLORS[client.estado] || '#38BDF8';
+              const dotRadius = isSelected ? 9 : isHovered ? 8.5 : 7.5;
+
+              return (
+                <Group
+                  key={client.id}
+                  x={client.x}
+                  y={client.y}
+                  onClick={(e) => {
+                    e.cancelBubble = true;
+                    setSimSelectedClientId(
+                      client.id === simSelectedClientId ? null : client.id
+                    );
+                  }}
+                  onMouseEnter={(e) => {
+                    const stage = e.target.getStage();
+                    if (stage) stage.container().style.cursor = 'pointer';
+                    setHoveredClient(client);
+                    setTooltipPos({
+                      x: client.x * canvasScale + canvasOffset.x,
+                      y: client.y * canvasScale + canvasOffset.y,
+                    });
+                  }}
+                  onMouseMove={() => {
+                    setTooltipPos({
+                      x: client.x * canvasScale + canvasOffset.x,
+                      y: client.y * canvasScale + canvasOffset.y,
+                    });
+                  }}
+                  onMouseLeave={(e) => {
+                    const stage = e.target.getStage();
+                    if (stage) stage.container().style.cursor = 'default';
+                    setHoveredClient(null);
+                    setTooltipPos(null);
+                  }}
+                >
+                  {/* Halo de ejercicio activo */}
+                  {client.estado === 'ejercitando' && (
+                    <Circle
+                      radius={15}
+                      stroke={color}
+                      strokeWidth={1.5}
+                      dash={[4, 3]}
+                      opacity={0.65}
+                    />
+                  )}
+
+                  {/* Anillo de espera en cola */}
+                  {client.estado === 'esperando' && (
+                    <Circle
+                      radius={13}
+                      stroke={color}
+                      strokeWidth={1.5}
+                      opacity={0.6}
+                    />
+                  )}
+
+                  {/* Anillo dorado de cliente seleccionado */}
+                  {(isSelected || isHovered) && (
+                    <Circle
+                      radius={17}
+                      stroke="#F59E0B"
+                      strokeWidth={2}
+                      dash={[3, 3]}
+                      opacity={0.9}
+                    />
+                  )}
+
+                  {/* Cuerpo principal del punto */}
+                  <Circle
+                    radius={dotRadius}
+                    fill={color}
+                    stroke="#FFFFFF"
+                    strokeWidth={1.5}
+                    shadowColor={color}
+                    shadowBlur={isHovered || isSelected ? 12 : 7}
+                    shadowOpacity={0.9}
+                  />
+
+                  {/* Badge de turno en fila (#1, #2...) */}
+                  {simShowQueues &&
+                    client.estado === 'esperando' &&
+                    client.queuePosition !== undefined && (
+                      <Group y={-19}>
+                        <Rect
+                          x={-10}
+                          y={-7}
+                          width={20}
+                          height={14}
+                          fill="#F59E0B"
+                          cornerRadius={3}
+                          stroke="#78350F"
+                          strokeWidth={0.5}
+                        />
+                        <Text
+                          x={-10}
+                          y={-5}
+                          width={20}
+                          text={`#${client.queuePosition + 1}`}
+                          fill="#000000"
+                          fontSize={8.5}
+                          fontStyle="bold"
+                          align="center"
+                        />
+                      </Group>
+                    )}
+
+                  {/* Etiqueta de cliente sobre el plano */}
+                  {simShowLabels && (
+                    <Text
+                      x={-35}
+                      y={10}
+                      width={70}
+                      text={client.name || 'Cliente'}
+                      fill="#FFFFFF"
+                      fontSize={8.5}
+                      fontStyle="bold"
+                      align="center"
+                      shadowColor="#000"
+                      shadowBlur={4}
+                    />
+                  )}
+                </Group>
+              );
+            })}
+          </Layer>
+        )}
       </Stage>
       )}
+
+      {/* Tarjeta flotante de inspección de cliente (Hover) */}
+      {activeTab === 'simulacion' && hoveredClient && tooltipPos && (
+        <div
+          className="pointer-events-none absolute z-50 bg-zinc-900/95 backdrop-blur-md border border-zinc-700/80 rounded-xl p-3 shadow-2xl text-xs text-zinc-200 transition-all duration-75 min-w-[200px]"
+          style={{
+            left: `${tooltipPos.x}px`,
+            top: `${tooltipPos.y - 18}px`,
+            transform: 'translate(-50%, -100%)',
+          }}
+        >
+          <div className="flex items-center gap-2 mb-2 border-b border-zinc-800 pb-1.5">
+            <span
+              className="w-3 h-3 rounded-full shadow-sm shrink-0"
+              style={{ backgroundColor: CLIENT_STATE_COLORS[hoveredClient.estado] }}
+            />
+            <span className="font-bold text-zinc-100">{hoveredClient.name || 'Cliente'}</span>
+            <span className="text-[9px] uppercase tracking-wide bg-zinc-800 px-2 py-0.5 rounded text-zinc-300 ml-auto font-medium">
+              {ROUTINE_CONFIG[hoveredClient.rutina]?.label || hoveredClient.rutina}
+            </span>
+          </div>
+          <div className="space-y-1 text-[11px]">
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Estado:</span>
+              <span className="capitalize font-semibold" style={{ color: CLIENT_STATE_COLORS[hoveredClient.estado] }}>
+                {hoveredClient.estado}
+                {hoveredClient.estado === 'esperando' && hoveredClient.queuePosition !== undefined && (
+                  ` (#${hoveredClient.queuePosition + 1} en fila)`
+                )}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Destino:</span>
+              <span className="font-medium text-sky-400 truncate max-w-[120px]">
+                {hoveredClient.estado === 'saliendo'
+                  ? 'Salida del gimnasio'
+                  : plantaMachines.find((m) => m.id === hoveredClient.targetMachineId)?.nombre || 'Buscando'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Tiempo en gym:</span>
+              <span className="text-zinc-300 font-mono">{Math.round(hoveredClient.totalTime)} min</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Progreso circuito:</span>
+              <span className="text-emerald-400 font-mono">
+                {hoveredClient.machinesVisited.length} completadas
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tooltip de máquina al hover (Fase 5) */}
+      {hoveredMachineId && !isDragging && !isTracing && (() => {
+        const hm = plantaMachines.find((m) => m.id === hoveredMachineId);
+        if (!hm || !hm.placed) return null;
+        const sx = hm.x * canvasScale + canvasOffset.x;
+        const sy = hm.y * canvasScale + canvasOffset.y;
+        return (
+          <div
+            className="pointer-events-none absolute z-40 bg-zinc-900/95 backdrop-blur-md border border-zinc-700/80 rounded-lg px-2.5 py-1.5 shadow-xl text-[10px] text-zinc-300 whitespace-nowrap"
+            style={{
+              left: `${sx}px`,
+              top: `${sy - 10}px`,
+              transform: 'translate(-50%, -100%)',
+            }}
+          >
+            <span className="font-semibold text-zinc-100">{hm.nombre}</span>
+            <span className="text-zinc-500 ml-1.5">{hm.largo}×{hm.ancho}m</span>
+            {hm.locked && <span className="ml-1.5 text-yellow-500">🔒</span>}
+          </div>
+        );
+      })()}
+
+      {/* Indicador de colisión al arrastrar */}
+      {isDragging && dragCollisions.length > 0 && (() => {
+        const names = dragCollisions.map((id) => plantaMachines.find((m) => m.id === id)?.nombre).filter(Boolean);
+        return (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 border border-red-500/60 rounded-lg px-3 py-1.5 text-xs text-red-200 shadow-lg backdrop-blur-sm">
+            ⚠️ Colisión detectada con: {names.join(', ')}
+          </div>
+        );
+      })()}
 
       {/* Canvas info overlay */}
       <div className="absolute top-3 right-3 bg-zinc-900/80 backdrop-blur-sm rounded-lg px-3 py-2 text-xs border border-zinc-800/50">
@@ -904,6 +1500,142 @@ export default function LayoutCanvas() {
           }
         />
       )}
+
+      {/* Menú contextual (Fase 10) */}
+      {contextMenu && (() => {
+        const store = useStore.getState();
+        const multiSelect = selectedMachineIds.length > 1;
+
+        if (contextMenu.machineId) {
+          // Menú sobre máquina
+          const m = plantaMachines.find((mac) => mac.id === contextMenu.machineId);
+          if (!m) return null;
+
+          const items: MenuItem[] = [
+            {
+              label: 'Editar propiedades',
+              icon: '✏️',
+              onClick: () => setSelectedMachine(m.id),
+            },
+            {
+              label: 'Duplicar',
+              icon: '📋',
+              shortcut: '⌘D',
+              onClick: () => duplicateMachine(m.id),
+            },
+            {
+              label: m.locked ? 'Desbloquear' : 'Bloquear',
+              icon: '🔒',
+              shortcut: '⌘L',
+              onClick: () => multiSelect ? bulkToggleLock() : toggleLockMachine(m.id),
+            },
+            {
+              label: 'Rotar 90° CW',
+              icon: '↻',
+              shortcut: 'R',
+              onClick: () => multiSelect ? bulkRotate(90) : rotateMachine(m.id, 90),
+            },
+            {
+              label: 'Rotar 90° CCW',
+              icon: '↺',
+              shortcut: '⇧R',
+              onClick: () => multiSelect ? bulkRotate(-90) : rotateMachine(m.id, -90),
+            },
+            { separator: true },
+            {
+              label: 'Alinear',
+              icon: '📐',
+              onClick: () => {},
+              disabled: !multiSelect,
+              children: [
+                { label: 'Alinear izquierda', icon: '⬅', onClick: () => bulkAlign('left') },
+                { label: 'Alinear centro H', icon: '↔', onClick: () => bulkAlign('centerX') },
+                { label: 'Alinear derecha', icon: '➡', onClick: () => bulkAlign('right') },
+                { label: 'Alinear arriba', icon: '⬆', onClick: () => bulkAlign('top') },
+                { label: 'Alinear centro V', icon: '↕', onClick: () => bulkAlign('centerY') },
+                { label: 'Alinear abajo', icon: '⬇', onClick: () => bulkAlign('bottom') },
+              ],
+            },
+            {
+              label: 'Distribuir',
+              icon: '📏',
+              onClick: () => {},
+              disabled: selectedMachineIds.length < 3,
+              children: [
+                { label: 'Horizontal igual', icon: '↔', onClick: () => bulkDistribute('horizontal') },
+                { label: 'Vertical igual', icon: '↕', onClick: () => bulkDistribute('vertical') },
+              ],
+            },
+            { separator: true },
+            {
+              label: multiSelect ? `Eliminar ${selectedMachineIds.length}` : 'Eliminar',
+              icon: '🗑️',
+              shortcut: 'Del',
+              danger: true,
+              onClick: () => multiSelect ? bulkRemove() : removeMachine(m.id),
+            },
+          ];
+
+          return (
+            <ContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              items={items}
+              onClose={() => setContextMenu(null)}
+            />
+          );
+        } else {
+          // Menú sobre canvas vacío
+          const items: MenuItem[] = [
+            {
+              label: 'Dibujar zona aquí',
+              icon: '🔲',
+              onClick: () => store.setActiveTool('zone'),
+            },
+            {
+              label: 'Trazar recinto',
+              icon: '🏗️',
+              onClick: () => store.startTracing(),
+            },
+            { separator: true },
+            {
+              label: 'Zoom para ajustar',
+              icon: '🔍',
+              shortcut: '⌘0',
+              onClick: () => {
+                // Fit to view
+                if (containerRef.current) {
+                  const cw = containerRef.current.clientWidth;
+                  const ch = containerRef.current.clientHeight;
+                  const scaleX = cw / canvasW;
+                  const scaleY = ch / canvasH;
+                  const newScale = Math.min(scaleX, scaleY) * 0.9;
+                  setCanvasScale(newScale);
+                  setCanvasOffset({
+                    x: (cw - canvasW * newScale) / 2,
+                    y: (ch - canvasH * newScale) / 2,
+                  });
+                }
+              },
+            },
+            {
+              label: 'Seleccionar todo',
+              icon: '📋',
+              shortcut: '⌘A',
+              onClick: () => store.selectAll(),
+            },
+          ];
+
+          return (
+            <ContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              items={items}
+              onClose={() => setContextMenu(null)}
+            />
+          );
+        }
+      })()}
 
       {/* Shortcuts hint (bottom-left) */}
       <div className="absolute bottom-3 left-3 bg-zinc-900/60 backdrop-blur-sm rounded-lg px-2.5 py-1.5 text-[10px] text-zinc-600 border border-zinc-800/30 space-y-0.5">

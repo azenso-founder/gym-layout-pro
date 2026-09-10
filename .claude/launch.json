@@ -5,7 +5,7 @@
       "name": "gym-layout-pro",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["dev"],
-      "port": 3000
+      "port": 3001
     }
   ]
 }

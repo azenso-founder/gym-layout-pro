@@ -6,6 +6,8 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
+import '@/styles/accessibility.css';
+import '@/styles/responsive.css';
 import { AuthProvider } from '@/components/Auth/AuthProvider';
 
 const inter = Inter({

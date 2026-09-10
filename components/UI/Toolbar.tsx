@@ -1,31 +1,38 @@
 // ==========================================
-// Barra de herramientas — Rediseño visual
-// Agrupaciones claras, iconos + labels, indicador de guardado
+// Barra de herramientas — Rediseño UX completo
+// Íconos 28px mínimo, touch targets 44px (WCAG 2.5.5)
+// Lucide React icons, tooltips con atajos
 // ==========================================
+
+'use client';
 
 import { useEffect, useState } from 'react';
 import {
-  FiMousePointer, FiMove, FiRotateCw, FiMaximize, FiGrid,
-  FiEye, FiEyeOff, FiUpload, FiImage, FiSave, FiTrash2,
-  FiZoomIn, FiZoomOut, FiCheck, FiEdit3, FiSettings,
-} from 'react-icons/fi';
-import { BiUndo, BiRedo, BiRuler } from 'react-icons/bi';
-import { MdOutlineHexagon } from 'react-icons/md';
+  MousePointer2, Hand, RotateCw, Ruler, Hexagon, PenTool,
+  Move, Grid3X3, Eye, EyeOff, Upload, Image, Save,
+  ZoomIn, ZoomOut, Maximize, Undo2, Redo2, Settings,
+  Trash2, Check, Layers, AlertTriangle, Route,
+} from 'lucide-react';
 import useStore, { m2px } from '@/stores/useStore';
 import { PLANTA_INFO } from '@/data/machines';
+import { tokens } from '@/lib/design/tokens';
+import IconButton from '@/components/UI/IconButton';
+import Tooltip from '@/components/UI/Tooltip';
 import type { EditorTool, SnapGrid } from '@/types';
 
+// Tamaño de íconos (mínimo 28px según spec)
+const ICON_SIZE = 24;
+
 const TOOLS: { id: EditorTool; icon: React.ReactNode; label: string; shortcut?: string }[] = [
-  { id: 'select', icon: <FiMousePointer />, label: 'Seleccionar', shortcut: 'V' },
-  { id: 'move', icon: <FiMove />, label: 'Mover', shortcut: 'M' },
-  { id: 'rotate', icon: <FiRotateCw />, label: 'Rotar', shortcut: 'R' },
-  { id: 'measure', icon: <BiRuler />, label: 'Medir' },
-  { id: 'zone', icon: <MdOutlineHexagon />, label: 'Zona' },
-  { id: 'trace', icon: <FiEdit3 />, label: 'Trazar Plano', shortcut: 'T' },
-  { id: 'pan', icon: <FiMaximize />, label: 'Pan', shortcut: 'H' },
+  { id: 'select', icon: <MousePointer2 size={ICON_SIZE} />, label: 'Seleccionar', shortcut: 'V' },
+  { id: 'pan', icon: <Hand size={ICON_SIZE} />, label: 'Mover canvas', shortcut: 'H' },
+  { id: 'rotate', icon: <RotateCw size={ICON_SIZE} />, label: 'Rotar', shortcut: 'R' },
+  { id: 'measure', icon: <Ruler size={ICON_SIZE} />, label: 'Medir', shortcut: 'M' },
+  { id: 'zone', icon: <Hexagon size={ICON_SIZE} />, label: 'Dibujar Zona', shortcut: 'Z' },
+  { id: 'trace', icon: <PenTool size={ICON_SIZE} />, label: 'Trazar Plano', shortcut: 'T' },
 ];
 
-const SNAP_OPTIONS: SnapGrid[] = [0.25, 0.50, 1.00];
+const SNAP_OPTIONS: SnapGrid[] = [0.10, 0.25, 0.50, 1.00];
 
 export default function Toolbar() {
   const activeTool = useStore((s) => s.activeTool);
@@ -49,6 +56,8 @@ export default function Toolbar() {
   const lastSaved = useStore((s) => s.lastSaved);
   const clearDraft = useStore((s) => s.clearDraft);
   const activePlanta = useStore((s) => s.activePlanta);
+  const history = useStore((s) => s.history);
+  const historyIndex = useStore((s) => s.historyIndex);
 
   // Floor tracing
   const startTracing = useStore((s) => s.startTracing);
@@ -72,7 +81,7 @@ export default function Toolbar() {
 
   const [showCalibration, setShowCalibration] = useState(false);
 
-  // Save indicator animation
+  // Save indicator
   const [showSaved, setShowSaved] = useState(false);
   useEffect(() => {
     if (lastSaved) {
@@ -94,7 +103,6 @@ export default function Toolbar() {
         const reader = new FileReader();
         reader.onload = () => {
           const src = reader.result as string;
-          // Both: add as layer AND set as bg for legacy support
           addImageLayer(src, activePlanta);
           setBgImage(activePlanta, src);
         };
@@ -124,13 +132,23 @@ export default function Toolbar() {
     }
   };
 
-  return (
-    <div className="h-11 bg-gradient-to-b from-zinc-900 to-zinc-900/95 border-b border-zinc-800/80 flex items-center px-2 gap-1 shrink-0 backdrop-blur-sm">
+  // Conteos para undo/redo
+  const undoCount = historyIndex + 1;
+  const redoCount = history.length - historyIndex - 1;
 
+  return (
+    <div
+      className="shrink-0 flex items-center px-3 gap-1 backdrop-blur-sm border-b"
+      style={{
+        height: tokens.spacing.toolbar,
+        background: `linear-gradient(to bottom, ${tokens.colors.bg.panel}, ${tokens.colors.bg.panel}ee)`,
+        borderColor: tokens.colors.border.subtle,
+      }}
+    >
       {/* ── Herramientas de edición ── */}
       <ToolGroup label="Herramientas">
         {TOOLS.map((tool) => (
-          <ToolBtn
+          <IconButton
             key={tool.id}
             icon={tool.icon}
             label={tool.label}
@@ -138,72 +156,104 @@ export default function Toolbar() {
             active={activeTool === tool.id}
             onClick={() => {
               if (tool.id === 'trace') {
-                if (isTracing) {
-                  cancelTracing();
-                } else {
-                  startTracing();
-                }
+                if (isTracing) cancelTracing();
+                else startTracing();
               } else {
                 if (isTracing) cancelTracing();
                 setActiveTool(tool.id);
               }
             }}
-            color={tool.id === 'trace' ? 'blue' : undefined}
           />
         ))}
       </ToolGroup>
 
       <Divider />
 
-      {/* ── Deshacer / Rehacer ── */}
+      {/* ── Deshacer / Rehacer con contador ── */}
       <ToolGroup label="Historial">
-        <ToolBtn icon={<BiUndo />} label="Deshacer" shortcut="⌘Z" onClick={undo} />
-        <ToolBtn icon={<BiRedo />} label="Rehacer" shortcut="⌘⇧Z" onClick={redo} />
+        <div className="relative">
+          <IconButton
+            icon={<Undo2 size={ICON_SIZE} />}
+            label="Deshacer"
+            shortcut="⌘Z"
+            onClick={undo}
+            disabled={undoCount === 0}
+          />
+          {undoCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full text-[9px] font-bold bg-blue-500 text-white">
+              {undoCount}
+            </span>
+          )}
+        </div>
+        <div className="relative">
+          <IconButton
+            icon={<Redo2 size={ICON_SIZE} />}
+            label="Rehacer"
+            shortcut="⌘⇧Z"
+            onClick={redo}
+            disabled={redoCount <= 0}
+          />
+          {redoCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full text-[9px] font-bold bg-blue-500 text-white">
+              {redoCount}
+            </span>
+          )}
+        </div>
       </ToolGroup>
 
       <Divider />
 
       {/* ── Grid + Snap ── */}
       <ToolGroup label="Grilla">
-        <ToolBtn
-          icon={<FiGrid />}
+        <IconButton
+          icon={<Grid3X3 size={ICON_SIZE} />}
           label="Grid"
+          shortcut="G"
           active={showGrid}
           onClick={toggleGrid}
-          color="blue"
         />
-        <select
-          value={snapGrid}
-          onChange={(e) => setSnapGrid(Number(e.target.value) as SnapGrid)}
-          className="bg-zinc-800/80 text-zinc-300 text-[10px] pl-1.5 pr-0.5 py-1.5 rounded-md border border-zinc-700/40 outline-none focus:border-orange-500/50 cursor-pointer hover:bg-zinc-700/60 transition-colors"
-          title="Tamaño de snap"
+        <Tooltip content="Tamaño de snap">
+          <select
+            value={snapGrid}
+            onChange={(e) => setSnapGrid(Number(e.target.value) as SnapGrid)}
+            className="h-9 bg-zinc-800/80 text-zinc-300 text-xs pl-2 pr-1 rounded-md border border-zinc-700/40 outline-none focus:border-blue-500/50 cursor-pointer hover:bg-zinc-700/60 transition-colors"
+            aria-label="Tamaño de snap"
+          >
+            {SNAP_OPTIONS.map((s) => (
+              <option key={s} value={s}>{s}m</option>
+            ))}
+          </select>
+        </Tooltip>
+        <span
+          className="text-[10px] font-medium px-2 py-1 rounded"
+          style={{
+            color: showGrid ? tokens.colors.accent.success : tokens.colors.text.muted,
+            background: showGrid ? 'rgba(34,197,94,0.1)' : 'transparent',
+          }}
         >
-          {SNAP_OPTIONS.map((s) => (
-            <option key={s} value={s}>{s}m</option>
-          ))}
-        </select>
+          Snap: {showGrid ? 'ON' : 'OFF'}
+        </span>
       </ToolGroup>
 
       <Divider />
 
-      {/* ── Vista: Halo + Fondo ── */}
+      {/* ── Vista: Halo + Plano de fondo ── */}
       <ToolGroup label="Vista">
-        <ToolBtn
-          icon={showGuerchetHalo ? <FiEye /> : <FiEyeOff />}
-          label="Halo"
+        <IconButton
+          icon={showGuerchetHalo ? <Eye size={ICON_SIZE} /> : <EyeOff size={ICON_SIZE} />}
+          label="Halos Guerchet"
+          shortcut="K"
           active={showGuerchetHalo}
           onClick={toggleGuerchetHalo}
-          color="emerald"
         />
-        <ToolBtn
-          icon={<FiImage />}
-          label="Plano"
+        <IconButton
+          icon={<Image size={ICON_SIZE} />}
+          label="Plano de fondo"
           active={showBg}
           onClick={toggleBg}
-          color="purple"
         />
         {showBg && (
-          <div className="flex items-center gap-1 ml-0.5">
+          <div className="flex items-center gap-1.5 ml-1">
             <input
               type="range"
               min={0.05}
@@ -211,129 +261,114 @@ export default function Toolbar() {
               step={0.05}
               value={bgOpacity}
               onChange={(e) => setBgOpacity(parseFloat(e.target.value))}
-              className="w-14 accent-purple-400 h-1"
-              title={`Opacidad: ${Math.round(bgOpacity * 100)}%`}
+              className="w-16 accent-blue-400 h-1"
+              aria-label={`Opacidad de fondo: ${Math.round(bgOpacity * 100)}%`}
             />
-            <span className="text-[9px] text-zinc-500 w-6 tabular-nums">
+            <span className="text-[10px] text-zinc-400 w-7 tabular-nums">
               {Math.round(bgOpacity * 100)}%
             </span>
           </div>
         )}
-        <ToolBtn
-          icon={<FiUpload />}
-          label="Importar"
+        <IconButton
+          icon={<Upload size={ICON_SIZE} />}
+          label="Importar imagen"
           onClick={handleImportBg}
         />
       </ToolGroup>
 
       <Divider />
 
-      {/* ── Análisis: Solapamientos + Flujo ── */}
+      {/* ── Análisis ── */}
       <ToolGroup label="Análisis">
-        <ToolBtn
-          icon={showOverlaps ? <FiEye /> : <FiEyeOff />}
+        <IconButton
+          icon={<AlertTriangle size={ICON_SIZE} />}
           label="Solapamientos"
           active={showOverlaps}
           onClick={toggleShowOverlaps}
-          color="emerald"
         />
-        <ToolBtn
-          icon={showTrafficFlow ? <FiEye /> : <FiEyeOff />}
-          label="Flujo"
+        <IconButton
+          icon={<Route size={ICON_SIZE} />}
+          label="Flujo de tráfico"
           active={showTrafficFlow}
           onClick={toggleTrafficFlow}
-          color="blue"
         />
       </ToolGroup>
 
       <Divider />
 
-      {/* ── Calibración de imagen ── */}
-      <ToolGroup label="Calibrar">
-        <ToolBtn
-          icon={<FiSettings />}
-          label="Calibrar Imagen"
+      {/* ── Calibración ── */}
+      <div className="relative">
+        <IconButton
+          icon={<Settings size={ICON_SIZE} />}
+          label="Calibrar imagen"
           active={showCalibration}
           onClick={() => setShowCalibration(!showCalibration)}
-          color="purple"
         />
         {showCalibration && (
-          <div className="absolute top-11 left-0 z-50 bg-zinc-900 border border-zinc-700 rounded-lg p-3 shadow-2xl w-64">
-            <h3 className="text-[11px] font-bold text-zinc-300 mb-2 uppercase tracking-wider">
+          <div
+            className="absolute top-full left-0 z-50 mt-1 p-3 w-72 rounded-lg"
+            style={{
+              background: tokens.colors.bg.surface,
+              border: `1px solid ${tokens.colors.border.default}`,
+              boxShadow: tokens.shadow.dropdown,
+            }}
+          >
+            <h3
+              className="mb-2 uppercase tracking-wider"
+              style={{ fontSize: tokens.typography.size.xs, fontWeight: tokens.typography.weight.bold, color: tokens.colors.text.secondary }}
+            >
               Calibrar Plano — {activePlanta === 'baja' ? 'P. Baja' : 'P. Alta'}
             </h3>
             <div className="space-y-2">
-              <CalibrationInput
-                label="Ancho imagen (m)"
-                value={imgCal.imgWidth}
-                onChange={(v) => setImgCalibration(activePlanta, { imgWidth: v })}
-                min={5} max={50} step={0.1}
-              />
-              <CalibrationInput
-                label="Alto imagen (m)"
-                value={imgCal.imgHeight}
-                onChange={(v) => setImgCalibration(activePlanta, { imgHeight: v })}
-                min={5} max={60} step={0.1}
-              />
-              <CalibrationInput
-                label="Offset X (m)"
-                value={imgCal.offsetX}
-                onChange={(v) => setImgCalibration(activePlanta, { offsetX: v })}
-                min={-10} max={10} step={0.05}
-              />
-              <CalibrationInput
-                label="Offset Y (m)"
-                value={imgCal.offsetY}
-                onChange={(v) => setImgCalibration(activePlanta, { offsetY: v })}
-                min={-10} max={10} step={0.05}
-              />
+              <CalibrationInput label="Ancho imagen (m)" value={imgCal.imgWidth} onChange={(v) => setImgCalibration(activePlanta, { imgWidth: v })} min={5} max={50} step={0.1} />
+              <CalibrationInput label="Alto imagen (m)" value={imgCal.imgHeight} onChange={(v) => setImgCalibration(activePlanta, { imgHeight: v })} min={5} max={60} step={0.1} />
+              <CalibrationInput label="Offset X (m)" value={imgCal.offsetX} onChange={(v) => setImgCalibration(activePlanta, { offsetX: v })} min={-10} max={10} step={0.05} />
+              <CalibrationInput label="Offset Y (m)" value={imgCal.offsetY} onChange={(v) => setImgCalibration(activePlanta, { offsetY: v })} min={-10} max={10} step={0.05} />
             </div>
             <button
-              className="mt-2.5 w-full py-1.5 text-[10px] font-medium text-zinc-400 hover:text-white rounded-md hover:bg-zinc-700 border border-zinc-700 transition-all"
+              className="mt-2.5 w-full py-2 text-xs font-medium rounded-md border transition-all hover:bg-zinc-700"
+              style={{ color: tokens.colors.text.secondary, borderColor: tokens.colors.border.default }}
               onClick={() => resetImgCalibration(activePlanta)}
             >
               Restablecer valores
             </button>
           </div>
         )}
-      </ToolGroup>
+      </div>
 
       {/* ── Superficie trazada ── */}
       {floorRooms.filter((r) => r.planta === activePlanta).length > 0 && (
         <>
           <Divider />
-          <div className="flex items-center gap-1.5 px-1.5 py-1 bg-cyan-500/10 rounded-md border border-cyan-500/20">
-            <span className="text-[10px] text-cyan-400 font-medium">
+          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md" style={{ background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.2)' }}>
+            <Layers size={14} className="text-cyan-400" />
+            <span className="text-[11px] text-cyan-400 font-medium">
               {floorRooms.filter((r) => r.planta === activePlanta).length} recintos
             </span>
-            <span className="text-[10px] text-cyan-300 font-bold tabular-nums">
+            <span className="text-[11px] text-cyan-300 font-bold tabular-nums">
               {getTotalFloorArea(activePlanta).toFixed(1)} m²
             </span>
           </div>
         </>
       )}
 
-      {/* ── Modo de trazo (before starting) ── */}
+      {/* ── Modo de trazo ── */}
       {activeTool === 'trace' && !isTracing && (
         <>
           <Divider />
-          <div className="flex items-center gap-1 px-1.5 py-0.5 bg-blue-500/10 rounded-md border border-blue-500/20">
-            <span className="text-[10px] text-blue-400 font-medium mr-1">Modo:</span>
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)' }}>
+            <span className="text-[11px] text-blue-400 font-medium mr-1">Modo:</span>
             <button
-              className={`px-2 py-0.5 text-[10px] rounded transition-all ${
-                tracingMode === 'room'
-                  ? 'bg-cyan-500/20 text-cyan-300 font-bold'
-                  : 'text-zinc-400 hover:text-zinc-200'
+              className={`px-3 py-1 text-[11px] rounded-md transition-all ${
+                tracingMode === 'room' ? 'bg-cyan-500/20 text-cyan-300 font-bold' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               }`}
               onClick={() => startTracing('room')}
             >
               Superficie
             </button>
             <button
-              className={`px-2 py-0.5 text-[10px] rounded transition-all ${
-                tracingMode === 'traffic'
-                  ? 'bg-amber-500/20 text-amber-300 font-bold'
-                  : 'text-zinc-400 hover:text-zinc-200'
+              className={`px-3 py-1 text-[11px] rounded-md transition-all ${
+                tracingMode === 'traffic' ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               }`}
               onClick={() => startTracing('traffic')}
             >
@@ -343,41 +378,37 @@ export default function Toolbar() {
         </>
       )}
 
-      {/* ── Tracing active indicator ── */}
+      {/* ── Indicador de trazado activo ── */}
       {isTracing && (
         <>
           <Divider />
-          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md border ${
-            tracingMode === 'traffic'
-              ? 'bg-amber-500/15 border-amber-500/30'
-              : 'bg-cyan-500/15 border-cyan-500/30'
-          }`}>
-            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-              tracingMode === 'traffic' ? 'bg-amber-400' : 'bg-cyan-400'
-            }`} />
-            <span className={`text-[10px] font-medium ${
-              tracingMode === 'traffic' ? 'text-amber-300' : 'text-cyan-300'
-            }`}>
-              {tracingMode === 'traffic' ? 'Línea de tráfico' : 'Trazando'} · {tracingPoints.length} pts
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md"
+            style={{
+              background: tracingMode === 'traffic' ? 'rgba(245,158,11,0.12)' : 'rgba(6,182,212,0.12)',
+              border: `1px solid ${tracingMode === 'traffic' ? 'rgba(245,158,11,0.25)' : 'rgba(6,182,212,0.25)'}`,
+            }}
+          >
+            <span className={`w-2 h-2 rounded-full animate-pulse ${tracingMode === 'traffic' ? 'bg-amber-400' : 'bg-cyan-400'}`} />
+            <span className={`text-[11px] font-medium ${tracingMode === 'traffic' ? 'text-amber-300' : 'text-cyan-300'}`}>
+              {tracingMode === 'traffic' ? 'Línea' : 'Trazando'} · {tracingPoints.length} pts
             </span>
             {((tracingMode === 'room' && tracingPoints.length >= 3) ||
               (tracingMode === 'traffic' && tracingPoints.length >= 2)) && (
               <button
-                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
-                  tracingMode === 'traffic'
-                    ? 'text-zinc-900 bg-amber-400 hover:bg-amber-300'
-                    : 'text-zinc-900 bg-cyan-400 hover:bg-cyan-300'
+                className={`px-3 py-1 text-[11px] font-bold rounded-md transition-all ${
+                  tracingMode === 'traffic' ? 'text-zinc-900 bg-amber-400 hover:bg-amber-300' : 'text-zinc-900 bg-cyan-400 hover:bg-cyan-300'
                 }`}
                 onClick={requestFinish}
-                title={tracingMode === 'traffic' ? 'Finalizar línea (Enter)' : 'Cerrar polígono y nombrar (Enter)'}
               >
-                {tracingMode === 'traffic' ? '✓ Finalizar línea' : '✓ Cerrar polígono'}
+                <Check size={14} className="inline mr-1" />
+                {tracingMode === 'traffic' ? 'Finalizar' : 'Cerrar polígono'}
               </button>
             )}
             <button
-              className="px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
+              className="px-2 py-1 text-[11px] text-zinc-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-all"
               onClick={cancelTracing}
-              title="Cancelar trazado (Esc)"
+              title="Cancelar (Esc)"
             >
               ✕
             </button>
@@ -385,54 +416,54 @@ export default function Toolbar() {
         </>
       )}
 
-      <Divider />
-
-      {/* ── Zoom ── */}
-      <ToolGroup label="Zoom">
-        <ToolBtn icon={<FiZoomOut />} label="Alejar" onClick={() => handleZoom('out')} />
-        <span className="text-[11px] text-zinc-400 w-10 text-center tabular-nums font-medium bg-zinc-800/50 py-1 rounded-md">
-          {Math.round(canvasScale * 100)}%
-        </span>
-        <ToolBtn icon={<FiZoomIn />} label="Acercar" onClick={() => handleZoom('in')} />
-        <button
-          className="px-2 py-1 text-[10px] font-semibold text-zinc-400 hover:text-white rounded-md hover:bg-zinc-700/60 border border-zinc-700/40 hover:border-zinc-600/60 transition-all"
-          onClick={() => handleZoom('fit')}
-          title="Ajustar a ventana"
-        >
-          Fit
-        </button>
-      </ToolGroup>
-
       {/* ── Spacer ── */}
       <div className="flex-1" />
 
-      {/* ── Guardado automático ── */}
+      {/* ── Zoom ── */}
+      <ToolGroup label="Zoom">
+        <IconButton icon={<ZoomOut size={ICON_SIZE} />} label="Alejar" shortcut="⌘−" onClick={() => handleZoom('out')} size="sm" />
+        <Tooltip content="Zoom actual">
+          <span
+            className="text-xs w-12 text-center tabular-nums font-medium py-1.5 rounded-md cursor-default"
+            style={{ background: tokens.colors.bg.surface, color: tokens.colors.text.secondary }}
+          >
+            {Math.round(canvasScale * 100)}%
+          </span>
+        </Tooltip>
+        <IconButton icon={<ZoomIn size={ICON_SIZE} />} label="Acercar" shortcut="⌘+" onClick={() => handleZoom('in')} size="sm" />
+        <IconButton icon={<Maximize size={ICON_SIZE} />} label="Ajustar a vista" shortcut="⌘0" onClick={() => handleZoom('fit')} size="sm" />
+      </ToolGroup>
+
+      <Divider />
+
+      {/* ── Guardado ── */}
       <div className="flex items-center gap-2">
-        <div className={`flex items-center gap-1 text-[10px] transition-all duration-500 ${
-          showSaved ? 'text-emerald-400' : 'text-zinc-600'
-        }`}>
+        <div
+          className="flex items-center gap-1.5 text-[11px] transition-all duration-500"
+          style={{ color: showSaved ? tokens.colors.accent.success : tokens.colors.text.muted }}
+        >
           {showSaved ? (
             <>
-              <FiCheck className="text-xs" />
+              <Check size={14} />
               <span className="font-medium">Guardado</span>
             </>
           ) : lastSaved ? (
             <>
-              <FiSave className="text-xs" />
+              <Save size={14} />
               <span>Borrador</span>
             </>
           ) : (
-            <span className="text-zinc-700">Sin cambios</span>
+            <span style={{ color: tokens.colors.text.muted }}>Sin cambios</span>
           )}
         </div>
         {lastSaved && (
-          <button
-            className="p-1 text-zinc-600 hover:text-red-400 rounded hover:bg-red-500/10 transition-all"
+          <IconButton
+            icon={<Trash2 size={16} />}
+            label="Limpiar borrador"
             onClick={clearDraft}
-            title="Limpiar borrador guardado y empezar de cero"
-          >
-            <FiTrash2 className="text-[11px]" />
-          </button>
+            size="sm"
+            variant="danger"
+          />
         )}
       </div>
     </div>
@@ -445,7 +476,10 @@ function ToolGroup({ label, children }: { label: string; children: React.ReactNo
   return (
     <div className="flex items-center gap-0.5 relative group/tg">
       {children}
-      <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 text-[7px] text-zinc-700 uppercase tracking-widest font-medium pointer-events-none opacity-0 group-hover/tg:opacity-100 transition-opacity whitespace-nowrap">
+      <span
+        className="absolute -bottom-1 left-1/2 -translate-x-1/2 uppercase tracking-widest font-medium pointer-events-none opacity-0 group-hover/tg:opacity-60 transition-opacity whitespace-nowrap"
+        style={{ fontSize: '7px', color: tokens.colors.text.muted }}
+      >
         {label}
       </span>
     </div>
@@ -453,90 +487,33 @@ function ToolGroup({ label, children }: { label: string; children: React.ReactNo
 }
 
 function Divider() {
-  return <div className="w-px h-6 bg-zinc-800/80 mx-1 shrink-0" />;
+  return <div className="w-px h-7 mx-1.5 shrink-0" style={{ background: tokens.colors.border.subtle }} />;
 }
 
 function CalibrationInput({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step,
+  label, value, onChange, min, max, step,
 }: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
+  label: string; value: number; onChange: (v: number) => void; min: number; max: number; step: number;
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] text-zinc-500 w-24 shrink-0">{label}</span>
+      <span className="w-28 shrink-0" style={{ fontSize: tokens.typography.size.xs, color: tokens.colors.text.muted }}>{label}</span>
       <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
+        type="range" min={min} max={max} step={step} value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="flex-1 accent-purple-400 h-1"
+        className="flex-1 accent-blue-400 h-1"
       />
       <input
-        type="number"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => {
-          const v = parseFloat(e.target.value);
-          if (!isNaN(v)) onChange(v);
+        type="number" min={min} max={max} step={step} value={value}
+        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) onChange(v); }}
+        className="w-16 px-2 py-1 rounded text-right tabular-nums outline-none"
+        style={{
+          fontSize: tokens.typography.size.xs,
+          background: tokens.colors.bg.elevated,
+          color: tokens.colors.text.primary,
+          border: `1px solid ${tokens.colors.border.default}`,
         }}
-        className="w-14 bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-1 rounded border border-zinc-700 outline-none focus:border-purple-500 tabular-nums text-right"
       />
     </div>
-  );
-}
-
-function ToolBtn({
-  icon,
-  label,
-  shortcut,
-  active,
-  onClick,
-  color,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  shortcut?: string;
-  active?: boolean;
-  onClick: () => void;
-  color?: 'blue' | 'emerald' | 'purple';
-}) {
-  const colorMap = {
-    blue: 'bg-blue-500/15 text-blue-400 ring-blue-500/20',
-    emerald: 'bg-emerald-500/15 text-emerald-400 ring-emerald-500/20',
-    purple: 'bg-purple-500/15 text-purple-400 ring-purple-500/20',
-  };
-
-  const activeCls = color && active
-    ? colorMap[color]
-    : active
-      ? 'bg-orange-500/15 text-orange-400 ring-orange-500/20'
-      : '';
-
-  return (
-    <button
-      className={`p-1.5 rounded-md text-sm transition-all ${
-        active
-          ? `${activeCls} ring-1`
-          : 'text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-200'
-      }`}
-      onClick={onClick}
-      title={`${label}${shortcut ? ` (${shortcut})` : ''}`}
-    >
-      {icon}
-    </button>
   );
 }

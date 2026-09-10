@@ -1,11 +1,20 @@
 // ==========================================
-// Sidebar izquierda — Inventario de máquinas
+// Sidebar izquierda — Inventario de máquinas (Rediseño UX)
+// Cards más grandes, Lucide icons, búsqueda mejorada,
+// resumen Guerchet siempre visible, indicadores de colocación
 // ==========================================
 
+'use client';
+
 import { useState } from 'react';
-import { FiSearch, FiPlus, FiChevronDown, FiChevronRight, FiGrid, FiCheck } from 'react-icons/fi';
+import {
+  Search, Plus, ChevronDown, ChevronRight, LayoutGrid, List,
+  Check, Grid3X3, Info,
+} from 'lucide-react';
 import useStore from '@/stores/useStore';
 import { CATEGORY_COLORS, CATEGORY_LABELS } from '@/types';
+import { tokens } from '@/lib/design/tokens';
+import Tooltip from './Tooltip';
 import type { MachineCategory } from '@/types';
 import CreateMachineModal from './CreateMachineModal';
 
@@ -22,17 +31,20 @@ export default function Sidebar() {
 
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
 
   const supUsada = getSuperficieUsada(activePlanta);
   const supDisponible = getSuperficieDisponible(activePlanta);
-  const porcentaje = Math.round((supUsada / supDisponible) * 100);
+  const porcentaje = supDisponible > 0 ? Math.round((supUsada / supDisponible) * 100) : 0;
   const overCapacity = supUsada > supDisponible;
+  const nearCapacity = porcentaje > 80 && !overCapacity;
 
   // Filtrar plantillas por planta y búsqueda
   const filtered = templates.filter(
     (t) =>
       t.planta === activePlanta &&
-      t.nombre.toLowerCase().includes(searchQuery.toLowerCase())
+      (t.nombre.toLowerCase().includes(searchQuery.toLowerCase()) ||
+       CATEGORY_LABELS[t.categoria].toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   // Contar cuántas ya fueron colocadas de cada template
@@ -42,15 +54,11 @@ export default function Sidebar() {
   // Total colocadas vs total disponibles
   const totalTemplates = templates.filter((t) => t.planta === activePlanta).length;
   const totalPlaced = new Set(
-    machines
-      .filter((m) => m.planta === activePlanta && m.placed)
-      .map((m) => m.templateId)
+    machines.filter((m) => m.planta === activePlanta && m.placed).map((m) => m.templateId)
   ).size;
 
   // Agrupar por categoría
-  const categories = Array.from(
-    new Set(filtered.map((t) => t.categoria))
-  ) as MachineCategory[];
+  const categories = Array.from(new Set(filtered.map((t) => t.categoria))) as MachineCategory[];
 
   const toggleCategory = (cat: string) => {
     setCollapsedCategories((prev) => {
@@ -62,99 +70,131 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="w-72 bg-zinc-900/95 border-r border-zinc-800 flex flex-col h-full shrink-0">
-      {/* Header con título y búsqueda */}
-      <div className="p-3 border-b border-zinc-800">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-            Inventario
+    <div
+      className="flex flex-col h-full shrink-0"
+      style={{
+        width: tokens.spacing.sidebar,
+        background: tokens.colors.bg.panel,
+        borderRight: `1px solid ${tokens.colors.border.subtle}`,
+      }}
+    >
+      {/* Header */}
+      <div className="p-3 border-b" style={{ borderColor: tokens.colors.border.subtle }}>
+        <div className="flex items-center justify-between mb-2.5">
+          <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: tokens.colors.text.secondary }}>
+            Inventario de Máquinas
           </h2>
-          <span className="text-[10px] text-zinc-500 bg-zinc-800 px-1.5 py-0.5 rounded">
-            {totalPlaced}/{totalTemplates} colocadas
-          </span>
+          <div className="flex items-center gap-1">
+            {/* Vista toggle */}
+            <Tooltip content="Vista lista">
+              <button
+                className="p-1 rounded"
+                style={{
+                  color: viewMode === 'list' ? tokens.colors.accent.primary : tokens.colors.text.muted,
+                  background: viewMode === 'list' ? tokens.colors.accent.primary + '15' : 'transparent',
+                }}
+                onClick={() => setViewMode('list')}
+              >
+                <List size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content="Vista grid">
+              <button
+                className="p-1 rounded"
+                style={{
+                  color: viewMode === 'grid' ? tokens.colors.accent.primary : tokens.colors.text.muted,
+                  background: viewMode === 'grid' ? tokens.colors.accent.primary + '15' : 'transparent',
+                }}
+                onClick={() => setViewMode('grid')}
+              >
+                <LayoutGrid size={14} />
+              </button>
+            </Tooltip>
+          </div>
         </div>
+
+        {/* Búsqueda */}
         <div className="relative">
-          <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs" />
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: tokens.colors.text.muted }} />
           <input
             type="text"
-            placeholder="Buscar máquina..."
+            placeholder="Buscar máquina o categoría..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-zinc-800/80 text-zinc-300 text-xs px-8 py-2 rounded-lg border border-zinc-700/50 outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/20 placeholder-zinc-600 transition-all"
+            className="w-full text-xs px-8 py-2.5 rounded-lg border outline-none transition-all placeholder:text-zinc-600"
+            style={{
+              background: tokens.colors.bg.surface,
+              color: tokens.colors.text.primary,
+              borderColor: tokens.colors.border.default,
+            }}
           />
           {searchQuery && (
             <button
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs"
+              style={{ color: tokens.colors.text.muted }}
               onClick={() => setSearchQuery('')}
             >
               ✕
             </button>
           )}
         </div>
+
+        {/* Badge de colocación */}
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-[10px]" style={{ color: tokens.colors.text.muted }}>
+            {totalPlaced}/{totalTemplates} tipos colocados
+          </span>
+          <div className="flex gap-1">
+            {/* Filtros rápidos por categoría */}
+            {Object.entries(CATEGORY_COLORS).slice(0, 5).map(([cat, color]) => {
+              const count = filtered.filter((t) => t.categoria === cat).length;
+              if (count === 0) return null;
+              return (
+                <Tooltip key={cat} content={CATEGORY_LABELS[cat as MachineCategory]}>
+                  <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: 0.8 }} />
+                </Tooltip>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
-      {/* Superficie Guerchet */}
-      <div className="px-3 py-2.5 border-b border-zinc-800">
-        <div className="flex justify-between items-baseline text-xs mb-1.5">
-          <span className="text-zinc-500">Superficie Guerchet</span>
-          <span className={`font-medium tabular-nums ${overCapacity ? 'text-red-400' : 'text-zinc-300'}`}>
-            {supUsada} / {supDisponible} m²
-          </span>
-        </div>
-        <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${
-              overCapacity
-                ? 'bg-red-500'
-                : porcentaje > 80
-                ? 'bg-amber-500'
-                : 'bg-emerald-500'
-            }`}
-            style={{ width: `${Math.min(100, porcentaje)}%` }}
-          />
-        </div>
-        <div className="flex justify-between mt-1">
-          <span className="text-[10px] text-zinc-600">
-            {porcentaje}% ocupado
-          </span>
-          <span className="text-[10px] text-zinc-600">
-            Margen: {Math.round((supDisponible - supUsada) * 10) / 10} m²
-          </span>
-        </div>
-
-        {/* Auto-colocar */}
+      {/* Acciones rápidas */}
+      <div className="px-3 py-2 border-b flex gap-2" style={{ borderColor: tokens.colors.border.subtle }}>
         <button
-          className="mt-2.5 w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 text-xs font-medium transition-all border border-orange-500/20 hover:border-orange-500/30"
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all border"
+          style={{
+            background: tokens.colors.accent.primary + '10',
+            color: tokens.colors.accent.primary,
+            borderColor: tokens.colors.accent.primary + '25',
+          }}
           onClick={autoPlaceAll}
-          title="Colocar automáticamente las máquinas no colocadas"
         >
-          <FiGrid className="text-xs" /> Auto-colocar todas
+          <Grid3X3 size={14} /> Auto-colocar
         </button>
-
-        {/* Crear máquina personalizada */}
         <button
-          className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-xs font-medium transition-all border border-cyan-500/20 hover:border-cyan-500/30"
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all border"
+          style={{
+            background: tokens.colors.accent.success + '10',
+            color: tokens.colors.accent.success,
+            borderColor: tokens.colors.accent.success + '25',
+          }}
           onClick={() => setShowCreateModal(true)}
-          title="Crear una máquina con medidas personalizadas"
         >
-          <FiPlus className="text-xs" /> Crear máquina personalizada
+          <Plus size={14} /> Crear
         </button>
       </div>
 
-      {/* Modal */}
       <CreateMachineModal open={showCreateModal} onClose={() => setShowCreateModal(false)} />
 
       {/* Lista de máquinas por categoría */}
       <div className="flex-1 overflow-y-auto py-1">
         {categories.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-            <div className="text-2xl mb-2">🔍</div>
-            <p className="text-xs text-zinc-500">No se encontraron máquinas</p>
+            <Search size={28} style={{ color: tokens.colors.text.muted }} className="mb-3" />
+            <p className="text-xs" style={{ color: tokens.colors.text.muted }}>No se encontraron máquinas</p>
             {searchQuery && (
-              <button
-                className="text-xs text-orange-400 mt-1 hover:underline"
-                onClick={() => setSearchQuery('')}
-              >
+              <button className="text-xs mt-2 hover:underline" style={{ color: tokens.colors.accent.primary }} onClick={() => setSearchQuery('')}>
                 Limpiar búsqueda
               </button>
             )}
@@ -164,62 +204,107 @@ export default function Sidebar() {
         {categories.map((cat) => {
           const catMachines = filtered.filter((t) => t.categoria === cat);
           const isCollapsed = collapsedCategories.has(cat);
-          const catPlacedCount = catMachines.filter(
-            (t) => placedCount(t.id) > 0
-          ).length;
+          const catPlacedCount = catMachines.filter((t) => placedCount(t.id) > 0).length;
+          const catColor = CATEGORY_COLORS[cat];
 
           return (
             <div key={cat} className="mb-0.5">
               {/* Category header */}
               <button
-                className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-zinc-800/60 transition-colors"
+                className="flex items-center gap-2 w-full text-left px-3 py-2 transition-colors"
+                style={{ borderLeft: `3px solid ${catColor}` }}
                 onClick={() => toggleCategory(cat)}
               >
-                <span className="text-zinc-500 text-[10px]">
-                  {isCollapsed ? <FiChevronRight /> : <FiChevronDown />}
+                <span style={{ color: tokens.colors.text.muted }}>
+                  {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                 </span>
-                <div
-                  className="w-2 h-2 rounded-sm shrink-0"
-                  style={{ backgroundColor: CATEGORY_COLORS[cat] }}
-                />
-                <span className="text-xs font-medium text-zinc-300 flex-1">
+                <span className="text-xs font-medium flex-1" style={{ color: tokens.colors.text.primary }}>
                   {CATEGORY_LABELS[cat]}
                 </span>
-                <span className="text-[10px] text-zinc-600">
+                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: tokens.colors.bg.surface, color: tokens.colors.text.muted }}>
                   {catPlacedCount}/{catMachines.length}
                 </span>
               </button>
 
-              {/* Machine list */}
+              {/* Machine items */}
               {!isCollapsed && (
-                <div className="pb-1">
+                <div className={viewMode === 'grid' ? 'grid grid-cols-2 gap-1.5 px-3 pb-2' : 'pb-1'}>
                   {catMachines.map((t) => {
                     const placed = placedCount(t.id);
                     const isPlaced = placed > 0;
 
+                    if (viewMode === 'grid') {
+                      // Grid card view
+                      return (
+                        <button
+                          key={t.id}
+                          className="flex flex-col items-center p-2.5 rounded-lg border text-center transition-all"
+                          style={{
+                            background: isPlaced ? tokens.colors.bg.active : tokens.colors.bg.surface,
+                            borderColor: isPlaced ? catColor + '40' : tokens.colors.border.subtle,
+                          }}
+                          onClick={() => addMachine(t.id)}
+                          title={`Añadir · St=${t.St}m²`}
+                        >
+                          {/* Mini shape */}
+                          <div
+                            className="w-12 h-8 rounded-sm mb-1.5 flex items-center justify-center"
+                            style={{
+                              backgroundColor: catColor + '20',
+                              border: `1px solid ${catColor}50`,
+                            }}
+                          >
+                            {isPlaced ? (
+                              <Check size={14} style={{ color: tokens.colors.accent.success }} />
+                            ) : (
+                              <span className="text-[8px] tabular-nums" style={{ color: tokens.colors.text.muted }}>
+                                {t.largo}×{t.ancho}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-medium truncate w-full" style={{ color: tokens.colors.text.primary }}>
+                            {t.nombre}
+                          </span>
+                          <span className="text-[9px] tabular-nums" style={{ color: tokens.colors.text.muted }}>
+                            {t.largo}×{t.ancho}m
+                          </span>
+                          {/* Placement dots */}
+                          {placed > 0 && (
+                            <div className="flex gap-0.5 mt-1">
+                              {Array.from({ length: Math.min(placed, 5) }).map((_, i) => (
+                                <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: catColor }} />
+                              ))}
+                              {placed > 5 && <span className="text-[8px]" style={{ color: tokens.colors.text.muted }}>+{placed - 5}</span>}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    }
+
+                    // List view
                     return (
                       <div
                         key={t.id}
-                        className={`flex items-center gap-2 mx-1.5 px-2 py-1.5 rounded-md text-xs cursor-pointer group transition-all ${
-                          isPlaced
-                            ? 'bg-zinc-800/30 hover:bg-zinc-800/60'
-                            : 'hover:bg-zinc-800/60'
-                        }`}
+                        className="flex items-center gap-2.5 mx-2 px-2.5 py-2 rounded-md text-xs cursor-pointer group transition-all"
+                        style={{
+                          background: isPlaced ? tokens.colors.bg.surface + '80' : 'transparent',
+                          minHeight: '48px',
+                        }}
                         onClick={() => addMachine(t.id)}
-                        title={`Clic para añadir al plano · ${t.largo}×${t.ancho}m · St=${t.St}m²`}
+                        title={`Clic para añadir · ${t.largo}×${t.ancho}m · St=${t.St}m²`}
                       >
-                        {/* Color indicator + mini preview */}
+                        {/* Color indicator */}
                         <div
-                          className="w-7 h-5 rounded border shrink-0 flex items-center justify-center"
+                          className="w-9 h-7 rounded-md border shrink-0 flex items-center justify-center"
                           style={{
-                            backgroundColor: CATEGORY_COLORS[cat] + '15',
-                            borderColor: CATEGORY_COLORS[cat] + '40',
+                            backgroundColor: catColor + '15',
+                            borderColor: catColor + '40',
                           }}
                         >
                           {isPlaced ? (
-                            <FiCheck className="text-emerald-400" style={{ fontSize: 10 }} />
+                            <Check size={14} style={{ color: tokens.colors.accent.success }} />
                           ) : (
-                            <span className="text-[8px] text-zinc-500 tabular-nums">
+                            <span className="text-[8px] tabular-nums" style={{ color: tokens.colors.text.muted }}>
                               {t.largo.toFixed(1)}
                             </span>
                           )}
@@ -227,27 +312,31 @@ export default function Sidebar() {
 
                         {/* Name + dims */}
                         <div className="flex-1 min-w-0">
-                          <div className={`truncate ${isPlaced ? 'text-zinc-400' : 'text-zinc-300'}`}>
+                          <div className="truncate" style={{ color: isPlaced ? tokens.colors.text.secondary : tokens.colors.text.primary }}>
                             {t.nombre}
                           </div>
-                          <div className="text-[10px] text-zinc-600 tabular-nums">
-                            {t.largo}×{t.ancho}m &middot; St={t.St}m²
+                          <div className="text-[10px] tabular-nums" style={{ color: tokens.colors.text.muted }}>
+                            {t.largo}×{t.ancho}m · St={t.St}m²
                           </div>
-                          <div className="text-[10px] text-zinc-600 tabular-nums">
-                            N={t.N} {t.N === 1 ? 'lado' : 'lados'} &middot; K={t.K}
+                          <div className="text-[10px] tabular-nums" style={{ color: tokens.colors.text.muted }}>
+                            N={t.N} {t.N === 1 ? 'lado' : 'lados'} · K={t.K}
                           </div>
                         </div>
 
+                        {/* Placement badge */}
+                        {placed > 0 && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: catColor + '20', color: catColor }}>
+                            ×{placed}
+                          </span>
+                        )}
+
                         {/* Add button */}
                         <button
-                          className="opacity-0 group-hover:opacity-100 p-1 text-orange-400 hover:text-orange-300 hover:bg-orange-500/10 rounded transition-all"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            addMachine(t.id);
-                          }}
-                          title="Añadir al plano"
+                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-md transition-all"
+                          style={{ color: tokens.colors.accent.primary }}
+                          onClick={(e) => { e.stopPropagation(); addMachine(t.id); }}
                         >
-                          <FiPlus className="text-xs" />
+                          <Plus size={16} />
                         </button>
                       </div>
                     );
@@ -259,11 +348,47 @@ export default function Sidebar() {
         })}
       </div>
 
-      {/* Footer help */}
-      <div className="px-3 py-2 border-t border-zinc-800 bg-zinc-900/50">
-        <p className="text-[10px] text-zinc-600 text-center">
-          Clic en una máquina para añadirla al plano
-        </p>
+      {/* ── Resumen Guerchet (siempre visible) ── */}
+      <div className="px-3 py-3 border-t" style={{ borderColor: tokens.colors.border.subtle, background: tokens.colors.bg.surface }}>
+        <div className="flex items-center gap-1.5 mb-2">
+          <Info size={12} style={{ color: tokens.colors.text.muted }} />
+          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: tokens.colors.text.muted }}>
+            Resumen Guerchet
+          </span>
+        </div>
+
+        <div className="flex justify-between items-baseline text-xs mb-1.5">
+          <span style={{ color: tokens.colors.text.muted }}>Superficie</span>
+          <span className="font-medium tabular-nums" style={{ color: overCapacity ? tokens.colors.accent.danger : tokens.colors.text.primary }}>
+            {supUsada} / {supDisponible} m²
+          </span>
+        </div>
+
+        {/* Progress bar */}
+        <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: tokens.colors.bg.elevated }}>
+          <div
+            className="h-full rounded-full transition-all duration-500"
+            style={{
+              width: `${Math.min(100, porcentaje)}%`,
+              background: overCapacity
+                ? tokens.colors.accent.danger
+                : nearCapacity
+                ? tokens.colors.accent.warning
+                : tokens.colors.accent.success,
+            }}
+          />
+        </div>
+
+        <div className="flex justify-between mt-1.5">
+          <span className="text-[10px]" style={{ color: tokens.colors.text.muted }}>
+            {porcentaje}% ocupado
+          </span>
+          <span className="text-[10px] font-medium" style={{
+            color: overCapacity ? tokens.colors.accent.danger : nearCapacity ? tokens.colors.accent.warning : tokens.colors.accent.success,
+          }}>
+            {overCapacity ? '⚠️ Excedido' : nearCapacity ? '⚠️ Casi lleno' : '✅'} Margen: {Math.round((supDisponible - supUsada) * 10) / 10} m²
+          </span>
+        </div>
       </div>
     </div>
   );

@@ -145,23 +145,30 @@ export const ROUTINE_CONFIG: Record<RoutineType, {
 };
 
 /** Estado de un cliente en la simulación */
-export type ClientState = 'caminando' | 'ejercitando' | 'esperando' | 'descansando';
+export type ClientState = 'caminando' | 'ejercitando' | 'esperando' | 'descansando' | 'saliendo';
 
 export const CLIENT_STATE_COLORS: Record<ClientState, string> = {
-  caminando: '#3B82F6',
+  caminando: '#38BDF8',
   ejercitando: '#22C55E',
-  esperando: '#EF4444',
+  esperando: '#F59E0B',
   descansando: '#FBBF24',
+  saliendo: '#A855F7',
 };
 
 /** Cliente en la simulación */
 export interface SimClient {
   id: string;
+  name?: string;
   rutina: RoutineType;
   estado: ClientState;
   x: number;
   y: number;
   targetMachineId: string | null;
+  targetX?: number;
+  targetY?: number;
+  queuePosition?: number;
+  serviceRemaining?: number;
+  serviceTotal?: number;
   machinesVisited: string[];
   machinesPending: string[];
   waitTime: number;
