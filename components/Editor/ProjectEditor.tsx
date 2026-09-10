@@ -17,6 +17,7 @@ import SLPModule from '@/components/SLP/SLPModule';
 import SimulationModule from '@/components/Simulation/SimulationModule';
 import MetricsModule from '@/components/Simulation/MetricsModule';
 import ExportModule from '@/components/Export/ExportModule';
+import CraftModule from '@/components/Craft/CraftModule';
 import LayoutProLogo from '@/components/UI/LayoutProLogo';
 import type { AppTab } from '@/types';
 
@@ -26,6 +27,7 @@ const MODULE_TABS: { id: AppTab; label: string; icon: string }[] = [
   { id: 'simulacion', label: 'Simulación', icon: '▶️' },
   { id: 'metricas', label: 'Métricas', icon: '📊' },
   { id: 'export', label: 'Exportar', icon: '📤' },
+  { id: 'craft', label: 'CRAFT', icon: '🏭' },
 ];
 
 interface Props {
@@ -353,6 +355,7 @@ export default function ProjectEditor({ projectId }: Props) {
           )}
           {activeTab === 'metricas' && <MetricsModule />}
           {activeTab === 'export' && <ExportModule />}
+          {activeTab === 'craft' && <CraftModule />}
         </div>
 
         {/* Properties panel (only in layout mode) */}

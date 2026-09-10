@@ -190,7 +190,7 @@ export interface SimulationMetrics {
 }
 
 /** Pestaña activa de la app */
-export type AppTab = 'layout' | 'slp' | 'simulacion' | 'metricas' | 'export';
+export type AppTab = 'layout' | 'slp' | 'simulacion' | 'metricas' | 'export' | 'craft';
 
 /** Recinto trazado sobre la grilla (polígono cerrado, editable como capa) */
 export interface FloorRoom {
